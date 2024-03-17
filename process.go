@@ -36,7 +36,7 @@ type Process struct {
 	cleanup  []func()
 }
 
-type Message struct {
+type message struct {
 	Action string           `json:"action"`
 	Data   pjson.RawMessage `json:"data"`
 	Id     int64            `json:"id"`
@@ -105,6 +105,7 @@ func startProcess(exe string) (*Process, error) {
 }
 
 func (p *Process) doWait() {
+	// wait for process to die, and perform cleanup
 	p.Cmd.Wait()
 	close(p.alive)
 	for _, f := range p.cleanup {
@@ -112,50 +113,56 @@ func (p *Process) doWait() {
 	}
 }
 
+// Kill will kill the nodejs instance
 func (p *Process) Kill() {
 	p.Cmd.Process.Kill()
 }
 
+// Alive returns a channel that will be closed when the nodejs process ends
 func (p *Process) Alive() <-chan struct{} {
 	return p.alive
 }
 
+// Close closes the nodejs stdin pipe, causing the process to die of natual causes
 func (p *Process) Close() error {
 	// close stdin
 	return p.in.Close()
 }
 
+// Console returns the console output so far for the nodejs process
 func (p *Process) Console() []byte {
 	return p.console.Bytes()
 }
 
-func (p *Process) Log(msg string, args ...interface{}) {
+// Log appends a message to the nodejs console directly so it can be retrieved with Console()
+func (p *Process) Log(msg string, args ...any) {
 	fmt.Fprintf(p.console, msg+"\n", args...)
 }
 
-func (p *Process) Run(code string, opts map[string]interface{}) {
+// Run executes the provided code in the nodejs instance. options can contain things like filename.
+// If filename ends in .mjs, the code will be run as a JS module
+func (p *Process) Run(code string, opts map[string]any) {
 	if opts == nil {
-		opts = map[string]interface{}{}
+		opts = map[string]any{}
 	}
-	p.send(map[string]interface{}{"action": "eval", "data": code, "opts": opts})
+	p.send(map[string]any{"action": "eval", "data": code, "opts": opts})
 }
 
+// SetIPC adds an IPC that can be called from nodejs
 func (p *Process) SetIPC(name string, f IpcFunc) {
 	p.ipc[name] = f
 }
 
-func (p *Process) Eval(code string, opts map[string]interface{}) (interface{}, error) {
+// Eval is similar to Run, but will return whatever the javascript code evaluated returned
+func (p *Process) Eval(ctx context.Context, code string, opts map[string]any) (any, error) {
 	if opts == nil {
-		opts = map[string]interface{}{}
+		opts = map[string]any{}
 	}
-	id, ch := p.MakeResponse()
-	err := p.send(map[string]interface{}{"action": "eval", "id": id, "data": code, "opts": opts})
+	id, ch := p.makeResponse()
+	err := p.send(map[string]any{"action": "eval", "id": id, "data": code, "opts": opts})
 	if err != nil {
 		return nil, err
 	}
-
-	t := time.NewTimer(1 * time.Second)
-	defer t.Stop()
 
 	select {
 	case res := <-ch:
@@ -166,13 +173,14 @@ func (p *Process) Eval(code string, opts map[string]interface{}) (interface{}, e
 			return v, nil
 		}
 		return nil, nil
-	case <-t.C:
-		return nil, ErrTimeout
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 
-func (p *Process) Set(v string, val interface{}) {
-	p.send(map[string]interface{}{"action": "set", "key": v, "data": val})
+// Set sets a variable in the javascript global scope of this instance
+func (p *Process) Set(v string, val any) {
+	p.send(map[string]any{"action": "set", "key": v, "data": val})
 }
 
 func (p *Process) readThread() {
@@ -193,7 +201,7 @@ func (p *Process) readThread() {
 			}
 			return
 		}
-		var data Message
+		var data message
 		err = pjson.Unmarshal(lin, &data)
 		if err != nil {
 			slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] parse failed: %s", err), "platform-fe.module", "nodejs", "event", "platform-fe:nodejs:json_fail")
@@ -208,7 +216,7 @@ func (p *Process) readStderr(stderr io.Reader) {
 	io.Copy(p.console, stderr)
 }
 
-func (p *Process) handleAction(msg *Message) {
+func (p *Process) handleAction(msg *message) {
 	defer func() {
 		if e := recover(); e != nil {
 			slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] handleAction crashed: %s", e), "platform-fe.module", "nodejs", "event", "platform-fe:nodejs:handleact_fail", "category", "go.panic")
@@ -233,7 +241,7 @@ func (p *Process) handleAction(msg *Message) {
 			slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] decode error: %s", err), "platform-fe.module", "nodejs", "event", "platform-fe:nodejs:json_fail")
 		}
 	case "response":
-		var res map[string]interface{}
+		var res map[string]any
 		err := pjson.Unmarshal(msg.Data, &res)
 		if err != nil {
 			slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] decode error: %s", err), "platform-fe.module", "nodejs", "event", "platform-fe:nodejs:json_fail")
@@ -247,10 +255,11 @@ func (p *Process) handleAction(msg *Message) {
 	}
 }
 
+// Checkpoint ensures the process is running and returns within the specified time
 func (p *Process) Checkpoint(timeout time.Duration) error {
 	str := rndstr.Simple(32, rndstr.Alnum)
 	ch := p.makeHandle(str)
-	p.send(map[string]interface{}{"action": "response", "data": map[string]interface{}{"id": str}})
+	p.send(map[string]any{"action": "response", "data": map[string]any{"id": str}})
 
 	t := time.NewTimer(timeout)
 	defer t.Stop()
@@ -264,13 +273,13 @@ func (p *Process) Checkpoint(timeout time.Duration) error {
 	}
 }
 
-func (p *Process) MakeResponse() (string, chan map[string]interface{}) {
+func (p *Process) makeResponse() (string, chan map[string]any) {
 	str := rndstr.Simple(32, rndstr.Alnum)
 	ch := p.makeHandle(str)
 	return str, ch
 }
 
-func (p *Process) handleResponse(res map[string]interface{}) {
+func (p *Process) handleResponse(res map[string]any) {
 	id, ok := res["id"].(string)
 	if !ok {
 		return
@@ -282,7 +291,7 @@ func (p *Process) handleResponse(res map[string]interface{}) {
 	v <- res
 }
 
-func (p *Process) takeHandle(str string) chan map[string]interface{} {
+func (p *Process) takeHandle(str string) chan map[string]any {
 	p.chkpntLk.Lock()
 	defer p.chkpntLk.Unlock()
 
@@ -294,7 +303,7 @@ func (p *Process) takeHandle(str string) chan map[string]interface{} {
 	return v
 }
 
-func (p *Process) makeHandle(str string) chan map[string]interface{} {
+func (p *Process) makeHandle(str string) chan map[string]any {
 	p.chkpntLk.Lock()
 	defer p.chkpntLk.Unlock()
 
@@ -319,9 +328,9 @@ func (p *Process) handleIpc(id int64, req pjson.RawMessage) {
 
 	switch ipc {
 	case "test":
-		p.ipcSuccess(id, map[string]interface{}{"ok": true})
+		p.ipcSuccess(id, map[string]any{"ok": true})
 	case "version":
-		p.ipcSuccess(id, map[string]interface{}{"version": runtime.Version()})
+		p.ipcSuccess(id, map[string]any{"version": runtime.Version()})
 	default:
 		if f, ok := p.ipc[ipc]; ok {
 			res, err := f(param)
@@ -342,19 +351,19 @@ func (p *Process) handleIpc(id int64, req pjson.RawMessage) {
 	}
 }
 
-func (p *Process) ipcSuccess(id int64, data interface{}) error {
+func (p *Process) ipcSuccess(id int64, data any) error {
 	return p.ipcResult(id, "ipc.success", data)
 }
 
-func (p *Process) ipcFailure(id int64, data interface{}) error {
+func (p *Process) ipcFailure(id int64, data any) error {
 	return p.ipcResult(id, "ipc.failure", data)
 }
 
-func (p *Process) ipcResult(id int64, code string, data interface{}) error {
-	return p.send(map[string]interface{}{"action": code, "id": id, "data": data})
+func (p *Process) ipcResult(id int64, code string, data any) error {
+	return p.send(map[string]any{"action": code, "id": id, "data": data})
 }
 
-func (p *Process) send(obj interface{}) error {
+func (p *Process) send(obj any) error {
 	buf, err := pjson.Marshal(obj)
 	if err != nil {
 		return err
