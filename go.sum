@@ -1,0 +1,6 @@
+github.com/KarpelesLab/pjson v0.1.9 h1:JVmm61sLRVb+5YkUDacgM1FlB9CTOsCUhEvF+OzUMf0=
+github.com/KarpelesLab/pjson v0.1.9/go.mod h1:gb4uSTld7I2kO2WvLdat1mN1brsS1hzSR+dWw1hL3iU=
+github.com/KarpelesLab/rndstr v0.0.1 h1:W7ajgLP+2E16p0VQOgDraFwPUJehQMQpQBF/AS8PAJA=
+github.com/KarpelesLab/rndstr v0.0.1/go.mod h1:Qyv1zfLX7UQx+7PhTm6+0ucZDKqmGZ0igtL/QymVp9U=
+github.com/KarpelesLab/runutil v0.2.4 h1:jtWAlr30Bjd0hpIKpia03pyA4gZyUCVGE+eUQ5QZeMQ=
+github.com/KarpelesLab/runutil v0.2.4/go.mod h1:Pn6ctZ1Ks10H6JpH+IXLxFi3B+s3bJ2aMtjOsYEIEeA=
