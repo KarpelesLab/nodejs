@@ -155,11 +155,7 @@ func (p *Process) SetIPC(name string, f IpcFunc) {
 
 // Eval is similar to Run, but will return whatever the javascript code evaluated returned
 func (p *Process) Eval(ctx context.Context, code string, opts map[string]any) (any, error) {
-	if opts == nil {
-		opts = map[string]any{}
-	}
-	id, ch := p.makeResponse()
-	err := p.send(map[string]any{"action": "eval", "id": id, "data": code, "opts": opts})
+	ch, err := p.EvalChannel(code, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -173,9 +169,26 @@ func (p *Process) Eval(ctx context.Context, code string, opts map[string]any) (a
 			return v, nil
 		}
 		return nil, nil
+	case <-p.alive:
+		return nil, ErrDeadProcess
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// EvalChannel will execute the provided code and return a channel that can be used to read the
+// response once it is made available
+func (p *Process) EvalChannel(code string, opts map[string]any) (chan map[string]any, error) {
+	if opts == nil {
+		opts = map[string]any{}
+	}
+	id, ch := p.MakeResponse()
+	err := p.send(map[string]any{"action": "eval", "id": id, "data": code, "opts": opts})
+	if err != nil {
+		return nil, err
+	}
+
+	return ch, nil
 }
 
 // Set sets a variable in the javascript global scope of this instance
@@ -273,7 +286,10 @@ func (p *Process) Checkpoint(timeout time.Duration) error {
 	}
 }
 
-func (p *Process) makeResponse() (string, chan map[string]any) {
+// MakeResponse returns a handler id and a channel that will see data appended to it if triggered
+// from the javascript side with a response event to that id. This can be useful for asynchronisous
+// events.
+func (p *Process) MakeResponse() (string, chan map[string]any) {
 	str := rndstr.Simple(32, rndstr.Alnum)
 	ch := p.makeHandle(str)
 	return str, ch
