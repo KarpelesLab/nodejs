@@ -56,7 +56,7 @@ func (factory *Factory) initialCheck() error {
 	}
 	defer proc.Close()
 
-	proc.Checkpoint(1 * time.Second)
+	proc.Checkpoint(30 * time.Second)
 
 	factory.version = proc.GetVersion("node")
 	slog.Debug(fmt.Sprintf("[nodejs] Confirmed nodejs running version %s, latency = %s", factory.version, proc.ping(5)), "event", "nodejs:version", "nodejs.version", factory.version)
