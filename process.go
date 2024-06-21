@@ -49,7 +49,7 @@ func init() {
 	runutil.Reap()
 }
 
-func startProcess(exe string) (*Process, error) {
+func startProcess(exe string, timeout time.Duration) (*Process, error) {
 	// start nodejs
 	proc := &Process{
 		Cmd: &exec.Cmd{
@@ -91,7 +91,7 @@ func startProcess(exe string) (*Process, error) {
 	proc.in.Write(append(append([]byte("(1,eval)("), bootstrapEnc...), ')', '\n'))
 
 	// give it 2 seconds to be ready
-	t := time.NewTimer(2 * time.Second)
+	t := time.NewTimer(timeout)
 	defer t.Stop()
 
 	select {

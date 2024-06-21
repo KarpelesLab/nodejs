@@ -42,14 +42,18 @@ func New() (*Factory, error) {
 }
 
 func (factory *Factory) New() (*Process, error) {
-	return startProcess(factory.nodePath)
+	return startProcess(factory.nodePath, 5*time.Second)
+}
+
+func (factory *Factory) NewWithTimeout(timeout time.Duration) (*Process, error) {
+	return startProcess(factory.nodePath, timeout)
 }
 
 func (factory *Factory) initialCheck() error {
 	// check if usable nodejs
 	slog.Debug(fmt.Sprintf("[nodejs] Using nodejs found at %s", factory.nodePath), "event", "nodejs:path")
 
-	proc, err := factory.New()
+	proc, err := factory.NewWithTimeout(30 * time.Second)
 	if err != nil {
 		slog.Error("[nodejs] Nodejs cannot be used, giving up", "event", "nodejs:fail")
 		return err
