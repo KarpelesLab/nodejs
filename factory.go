@@ -53,7 +53,7 @@ func (factory *Factory) initialCheck() error {
 	// check if usable nodejs
 	slog.Debug(fmt.Sprintf("[nodejs] Using nodejs found at %s", factory.nodePath), "event", "nodejs:path")
 
-	proc, err := factory.NewWithTimeout(30 * time.Second)
+	proc, err := factory.NewWithTimeout(5 * time.Minute)
 	if err != nil {
 		slog.Error("[nodejs] Nodejs cannot be used, giving up", "event", "nodejs:fail")
 		return err
