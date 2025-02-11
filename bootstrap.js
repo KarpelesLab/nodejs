@@ -5,6 +5,23 @@
 
 	//const importModuleDynamically = function(specifier, script, importAttributes) { ... };
 
+	const basicLinker = async function(specifier) {
+		switch(specifier) {
+			case "node:stream":
+				const mod = await import(specifier);
+				const keys = Object.keys(mod);
+				return new vm.SyntheticModule(
+					[...keys],
+					function init() {
+						for (const k of keys)
+							this.setExport(k, mod[k]);
+					},
+					{ identifier: 'synthetic:'+specifier},
+				);
+		}
+		throw new Error(`Unknown import: ${specifier}`);
+	};
+
 	const platform = function() {
 		let pf = new EventEmitter();
 		let buff = "";
@@ -19,7 +36,7 @@
 			try {
 				if (msg.opts.filename.endsWith(".mjs")) {
 					let mod = new vm.SourceTextModule(msg.data, msg.opts);
-					await mod.link(() => {});
+					await mod.link(basicLinker);
 					await mod.evaluate();
 					global.exports = mod.namespace;
 					if (msg.id) pf.emit('send', {'action': 'response', data: {id: msg.id, res: true}});
