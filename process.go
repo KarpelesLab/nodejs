@@ -18,39 +18,50 @@ import (
 	"github.com/KarpelesLab/runutil"
 )
 
+// IpcFunc is a function type for handling IPC calls from JavaScript to Go.
+// It receives a map of parameters and returns a response or error.
 type IpcFunc func(map[string]any) (any, error)
 
+// Process represents a running NodeJS process instance.
+// It wraps exec.Cmd and provides communication channels with the NodeJS process.
 type Process struct {
-	*exec.Cmd
+	*exec.Cmd // Embedded command to run NodeJS
 
-	versions map[string]string
-	in       io.WriteCloser
-	out      io.ReadCloser
-	ready    chan struct{}
-	alive    chan struct{}
-	ipc      map[string]IpcFunc
-	chkpnt   map[string]chan map[string]any
-	chkpntLk sync.RWMutex
-	console  *bytes.Buffer
-	ctx      context.Context
-	cleanup  []func()
+	versions map[string]string              // Version information from NodeJS
+	in       io.WriteCloser                 // Stdin pipe to the NodeJS process
+	out      io.ReadCloser                  // Stdout pipe from the NodeJS process
+	ready    chan struct{}                  // Channel closed when NodeJS is ready
+	alive    chan struct{}                  // Channel closed when NodeJS process exits
+	ipc      map[string]IpcFunc             // Map of registered IPC handlers
+	chkpnt   map[string]chan map[string]any // Map of checkpoint handlers
+	chkpntLk sync.RWMutex                   // Lock for checkpoint map
+	console  *bytes.Buffer                  // Buffer for console output
+	ctx      context.Context                // Context for cancellation
+	cleanup  []func()                       // Cleanup functions to run on exit
 }
 
+// message represents a JSON message exchanged with the NodeJS process.
+// These messages are used for communication between Go and NodeJS.
 type message struct {
-	Action string           `json:"action"`
-	Data   pjson.RawMessage `json:"data"`
-	Id     int64            `json:"id"`
+	Action string           `json:"action"` // Action to perform (e.g., "eval", "console.log")
+	Data   pjson.RawMessage `json:"data"`   // Message payload as raw JSON
+	Id     int64            `json:"id"`     // Message ID for tracking responses
 }
 
 const runArg = `(()=>{let i=process.stdin;let b="";let f=(d)=>{b+=d;if(b.slice(-1)=="\n"){i.off("data",f);(1,eval(b));}};i.on("data",f);})();`
 
+// init initializes the NodeJS package by reaping any zombie processes.
+// This helps clean up orphaned NodeJS processes from previous runs.
 func init() {
 	// clear zombies that may remain from a previous running version (pre-update)
 	runutil.Reap()
 }
 
+// startProcess creates and starts a new NodeJS process with the given executable path and timeout.
+// It sets up the communication channels, starts monitoring goroutines, and initializes the NodeJS
+// environment with bootstrap.js.
 func startProcess(exe string, timeout time.Duration) (*Process, error) {
-	// start nodejs
+	// Initialize the process with NodeJS config and environment
 	proc := &Process{
 		Cmd: &exec.Cmd{
 			Path:        exe,
@@ -58,13 +69,14 @@ func startProcess(exe string, timeout time.Duration) (*Process, error) {
 			Env:         []string{"HOME=/", "NODE_ENV=production"},
 			SysProcAttr: getSysProcAttr(),
 		},
-		ready:   make(chan struct{}),
-		alive:   make(chan struct{}),
+		ready:   make(chan struct{}), // Channel closed when NodeJS is ready
+		alive:   make(chan struct{}), // Channel closed when process exits
 		chkpnt:  make(map[string]chan map[string]any),
 		ipc:     make(map[string]IpcFunc),
-		console: &bytes.Buffer{},
+		console: &bytes.Buffer{}, // Buffer for console output
 	}
 
+	// Set up stdin and stdout pipes for communication
 	var err error
 	proc.in, err = proc.StdinPipe()
 	if err != nil {
@@ -76,9 +88,11 @@ func startProcess(exe string, timeout time.Duration) (*Process, error) {
 	}
 	stderr, err := proc.StderrPipe()
 
+	// Start goroutines to handle input/output
 	go proc.readThread()
 	go proc.readStderr(stderr)
 
+	// Start the NodeJS process
 	err = proc.Start()
 	if err != nil {
 		// we're getting some of those errors but shouldn't:
@@ -87,16 +101,18 @@ func startProcess(exe string, timeout time.Duration) (*Process, error) {
 	}
 	go proc.doWait()
 
-	// run bootstrap.js
+	// Initialize NodeJS environment with bootstrap.js code
 	proc.in.Write(append(append([]byte("(1,eval)("), bootstrapEnc...), ')', '\n'))
 
-	// give it 2 seconds to be ready
+	// Wait for the process to be ready or time out
 	t := time.NewTimer(timeout)
 	defer t.Stop()
 
 	select {
 	case <-proc.ready:
+		// Process is ready
 	case <-t.C:
+		// Timeout reached, kill the process
 		proc.Cmd.Process.Kill()
 		return nil, ErrTimeout
 	}
@@ -104,28 +120,35 @@ func startProcess(exe string, timeout time.Duration) (*Process, error) {
 	return proc, nil
 }
 
+// doWait waits for the NodeJS process to exit and performs cleanup.
+// It runs as a goroutine and executes all registered cleanup functions
+// when the process terminates.
 func (p *Process) doWait() {
-	// wait for process to die, and perform cleanup
+	// Wait for process to die
 	p.Cmd.Wait()
+	// Signal that the process is no longer alive
 	close(p.alive)
+	// Run all cleanup handlers
 	for _, f := range p.cleanup {
 		f()
 	}
 }
 
-// Kill will kill the nodejs instance
+// Kill forcibly terminates the NodeJS process immediately.
 func (p *Process) Kill() {
 	p.Cmd.Process.Kill()
 }
 
-// Alive returns a channel that will be closed when the nodejs process ends
+// Alive returns a channel that will be closed when the NodeJS process ends.
+// This can be used to monitor the process state and react to termination.
 func (p *Process) Alive() <-chan struct{} {
 	return p.alive
 }
 
-// Close closes the nodejs stdin pipe, causing the process to die of natual causes
+// Close gracefully shuts down the NodeJS process by closing its stdin pipe.
+// This allows the process to perform cleanup operations before exiting.
 func (p *Process) Close() error {
-	// close stdin
+	// Close stdin, which will cause the NodeJS process to exit cleanly
 	return p.in.Close()
 }
 
@@ -139,8 +162,10 @@ func (p *Process) Log(msg string, args ...any) {
 	fmt.Fprintf(p.console, msg+"\n", args...)
 }
 
-// Run executes the provided code in the nodejs instance. options can contain things like filename.
-// If filename ends in .mjs, the code will be run as a JS module
+// Run executes the provided JavaScript code in the NodeJS instance.
+// The options map can contain metadata like filename, which determines how the code is executed.
+// If the filename ends in .mjs, the code will be executed as an ES module.
+// This method does not return any results from the execution.
 func (p *Process) Run(code string, opts map[string]any) {
 	if opts == nil {
 		opts = map[string]any{}
@@ -153,25 +178,34 @@ func (p *Process) SetIPC(name string, f IpcFunc) {
 	p.ipc[name] = f
 }
 
-// Eval is similar to Run, but will return whatever the javascript code evaluated returned
+// Eval executes JavaScript code and returns the result of the evaluation.
+// Unlike Run, this method waits for the code to complete execution and returns the result.
+// It takes a context for timeout/cancellation control.
+// If the JavaScript code throws an error, it will be returned as a Go error.
 func (p *Process) Eval(ctx context.Context, code string, opts map[string]any) (any, error) {
+	// Get a channel that will receive the evaluation result
 	ch, err := p.EvalChannel(code, opts)
 	if err != nil {
 		return nil, err
 	}
 
+	// Wait for one of: result, process termination, or context cancellation
 	select {
 	case res := <-ch:
+		// Check if the JavaScript code resulted in an error
 		if v, ok := res["error"].(string); ok {
 			return nil, errors.New(v)
 		}
+		// Extract and return the result value
 		if v, ok := res["res"]; ok {
 			return v, nil
 		}
 		return nil, nil
 	case <-p.alive:
+		// Process died while waiting for result
 		return nil, ErrDeadProcess
 	case <-ctx.Done():
+		// Context was cancelled or timed out
 		return nil, ctx.Err()
 	}
 }
@@ -268,20 +302,28 @@ func (p *Process) handleAction(msg *message) {
 	}
 }
 
-// Checkpoint ensures the process is running and returns within the specified time
+// Checkpoint verifies that the NodeJS process is responsive by sending a message and waiting for a response.
+// It returns an error if the process does not respond within the specified timeout duration.
+// This is useful for health checks and ensuring the NodeJS process hasn't frozen.
 func (p *Process) Checkpoint(timeout time.Duration) error {
+	// Generate a random ID for this checkpoint
 	str := rndstr.Simple(32, rndstr.Alnum)
+	// Create a channel to receive the response
 	ch := p.makeHandle(str)
+	// Send a message that should trigger an immediate response
 	p.send(map[string]any{"action": "response", "data": map[string]any{"id": str}})
 
+	// Set timeout timer
 	t := time.NewTimer(timeout)
 	defer t.Stop()
 
+	// Wait for either response or timeout
 	select {
 	case <-ch:
+		// Got response, process is responsive
 		return nil
 	case <-t.C:
-		// timeout error
+		// Timeout reached, process is unresponsive
 		return ErrTimeout
 	}
 }

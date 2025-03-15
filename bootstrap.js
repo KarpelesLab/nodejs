@@ -1,3 +1,8 @@
+/**
+ * Bootstrap script for NodeJS integration with Go.
+ * This script sets up communication channels, event handling, and virtual context support
+ * to allow Go code to execute JavaScript in a controlled environment.
+ */
 (function() {
 	const EventEmitter = require('events');
 	const util = require('util');
