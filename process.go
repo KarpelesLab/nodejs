@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"runtime"
 	"sync"
@@ -243,7 +244,7 @@ func (p *Process) readThread() {
 	for {
 		lin, err := b.ReadBytes('\n')
 		if err != nil {
-			if err != io.EOF {
+			if !errors.Is(err, io.EOF) && !errors.Is(err, os.ErrClosed) {
 				slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] read failed: %s", err), "platform-fe.module", "nodejs", "event", "platform-fe:nodejs:read_fail")
 			}
 			return

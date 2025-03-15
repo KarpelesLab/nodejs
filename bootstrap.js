@@ -55,10 +55,19 @@
 					});
 				} else {
 					let res = vm.runInThisContext(msg.data, msg.opts);
-					if (msg.id) pf.emit('send', {
-						'action': 'response',
-						data: { id: msg.id, res }
-					});
+					if (msg.id) {
+						Promise.resolve(res).then(value => {
+							pf.emit('send', {
+								'action': 'response',
+								data: { id: msg.id, res: value }
+							});
+						}).catch(e => {
+							pf.emit('send', {
+								'action': 'response',
+								data: { id: msg.id, error: e.toString() }
+							});
+						});
+					}
 				}
 			} catch(e) {
 				console.log(e);
@@ -152,10 +161,19 @@
 				} else {
 					// plain script
 					let res = vm.runInContext(msg.data, context, msg.opts);
-					if (msg.id) pf.emit('send', {
-						'action': 'response',
-						data: { id: msg.id, res }
-					});
+					if (msg.id) {
+						Promise.resolve(res).then(value => {
+							pf.emit('send', {
+								'action': 'response',
+								data: { id: msg.id, res: value }
+							});
+						}).catch(e => {
+							pf.emit('send', {
+								'action': 'response',
+								data: { id: msg.id, error: e.toString() }
+							});
+						});
+					}
 				}
 			} catch(e) {
 				if (msg.id) pf.emit('send', {
