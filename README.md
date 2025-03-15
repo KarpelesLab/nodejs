@@ -2,11 +2,28 @@
 
 # nodejs tools for Go
 
-This contains a few nice tools for using nodejs in go
+A Go library that provides seamless integration with NodeJS, allowing Go programs to run JavaScript code through managed NodeJS instances.
 
-# Usage
+## Features
 
-First you need a nodejs factory:
+- **NodeJS Factory**: Automatic detection and initialization of NodeJS
+- **Process Management**: Start, monitor, and gracefully terminate NodeJS processes
+- **Process Pooling**: Efficiently manage multiple NodeJS instances with auto-scaling
+- **JavaScript Execution**: Run JS code with precise control and error handling
+- **IPC Communication**: Bidirectional communication between Go and JavaScript
+- **Health Monitoring**: Built-in process health checks and responsiveness verification
+
+## Installation
+
+```bash
+go get github.com/KarpelesLab/nodejs
+```
+
+## Basic Usage
+
+### Creating a NodeJS Factory
+
+The factory is responsible for finding and initializing NodeJS:
 
 ```go
 factory, err := nodejs.New()
@@ -15,4 +32,114 @@ if err != nil {
 }
 ```
 
-You can then start processes directly with `factory.New()` or use `factory.NewPool(0, 0)` to get a pool of pre-initialized nodejs instances.
+### Direct Process Management
+
+Create and manage individual NodeJS processes:
+
+```go
+// Create a new process with default timeout (5 seconds)
+process, err := factory.New()
+if err != nil {
+    // handle error
+}
+defer process.Close()
+
+// Run JavaScript without waiting for result
+process.Run("console.log('Hello from NodeJS')", nil)
+
+// Evaluate JavaScript and get result
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+result, err := process.Eval(ctx, "2 + 2", nil)
+if err != nil {
+    // handle error
+}
+fmt.Println("Result:", result) // Output: Result: 4
+```
+
+### Process Pool
+
+For applications that need to execute JavaScript frequently, using a pool improves performance:
+
+```go
+// Create a pool with auto-sized queue (defaults to NumCPU)
+pool := factory.NewPool(0, 0)
+
+// Get a process from the pool (waits if none available)
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+process, err := pool.Take(ctx)
+if err != nil {
+    // handle error: timeout or context cancelled
+}
+defer process.Close() // Returns process to pool
+
+// Execute JavaScript using the pooled process
+result, err := process.Eval(ctx, "(() => { return 'Hello from pooled NodeJS'; })()", nil)
+if err != nil {
+    // handle error
+}
+fmt.Println(result)
+```
+
+### Bidirectional IPC
+
+Register Go functions that can be called from JavaScript:
+
+```go
+process.SetIPC("greet", func(params map[string]any) (any, error) {
+    name, _ := params["name"].(string)
+    if name == "" {
+        name = "Guest"
+    }
+    return map[string]any{
+        "message": fmt.Sprintf("Hello, %s!", name),
+    }, nil
+})
+
+// In JavaScript, call the Go function:
+process.Run(`
+    async function testIPC() {
+        const result = await ipc('greet', { name: 'World' });
+        console.log(result.message); // Outputs: Hello, World!
+    }
+    testIPC();
+`, nil)
+```
+
+### Advanced Features
+
+#### Custom Timeouts
+
+```go
+// Create process with custom initialization timeout
+process, err := factory.NewWithTimeout(10 * time.Second)
+if err != nil {
+    // handle error
+}
+```
+
+#### Health Checks
+
+```go
+// Verify process is responsive
+if err := process.Checkpoint(2 * time.Second); err != nil {
+    // Process is not responding
+    process.Kill() // Force terminate if needed
+}
+```
+
+#### Module Support
+
+```go
+// Execute ES modules
+process.Run(`
+    import { createHash } from 'crypto';
+    const hash = createHash('sha256').update('hello').digest('hex');
+    console.log(hash);
+`, map[string]any{"filename": "example.mjs"})
+```
+
+## License
+
+See the LICENSE file for details.
