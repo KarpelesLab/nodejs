@@ -43,7 +43,8 @@
 		// legacy code (global object)
 		pf.on('eval', async (msg) => {
 			try {
-				if (msg.opts.filename.endsWith(".mjs")) {
+				msg.opts = msg.opts || {}; // Ensure opts exists
+				if (msg.opts.filename && msg.opts.filename.endsWith(".mjs")) {
 					let mod = new vm.SourceTextModule(msg.data, msg.opts);
 					await mod.link(basicLinker);
 					await mod.evaluate();
@@ -134,9 +135,11 @@
 					throw new Error(`Context '${ctxid}' does not exist.`);
 				}
 				const { context } = contexts[ctxid];
+				
+				msg.opts = msg.opts || {}; // Ensure opts exists
 
 				// If it's .mjs, treat it like a module
-				if (msg.opts.filename.endsWith(".mjs")) {
+				if (msg.opts.filename && msg.opts.filename.endsWith(".mjs")) {
 					let mod = new vm.SourceTextModule(msg.data, { ...msg.opts, context });
 					await mod.link(basicLinker);
 					await mod.evaluate();
@@ -221,7 +224,7 @@
 
 	defaultContext.__platformRest = global.__platformRest;
 	defaultContext.__platformSetCookie = global.__platformSetCookie;
-	defaultContext.__platformAsyncRest = global.__platformSetCookie;
+	defaultContext.__platformAsyncRest = global.__platformAsyncRest;
 
 	// Override console.log so it is routed out via platform
 	console.log = function() {

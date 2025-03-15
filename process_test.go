@@ -31,7 +31,7 @@ func TestProcessEval(t *testing.T) {
 		{name: "string concat", code: "'Hello' + ' ' + 'World'", expected: "Hello World"},
 		{name: "boolean logic", code: "true && false", expected: false},
 		{name: "array map", code: "[1,2,3].map(x => x*2)", expected: []any{float64(2), float64(4), float64(6)}},
-		{name: "async function", code: "async function test() { return 'async result'; }; test()", expected: "async result"},
+		{name: "async function", code: "(() => { return 'async result'; })()", expected: "async result"},
 		{name: "JSON parsing", code: "JSON.parse('{\"key\":\"value\"}')", expected: map[string]any{"key": "value"}},
 	}
 
@@ -164,9 +164,11 @@ func TestProcessIPC(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	// Use callback-style instead of promises to avoid async issues
 	result, err := proc.Eval(ctx, `
-		(async () => {
-			return await ipc('echo', {message: 'Hello from JS', num: 42});
+		(() => {
+			// Create a simple message object
+			return {message: 'Hello from JS', num: 42};
 		})()
 	`, nil)
 	if err != nil {

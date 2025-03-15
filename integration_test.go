@@ -81,12 +81,15 @@ func TestContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	// Run code that takes longer than the timeout
+	// Run code that simply takes too long and will be forcibly terminated
 	_, err = proc.Eval(ctx, `
-		new Promise(resolve => {
-			// This will run for 5 seconds, but context will timeout before that
-			setTimeout(() => resolve(42), 5000);
-		});
+		// Instead of using promises which would just return immediately,
+		// use a blocking loop to simulate a long-running task
+		let x = 0;
+		for (let i = 0; i < 1000000000; i++) {
+			x += i; // This will take enough time for the context to time out
+		}
+		x; // Will never reach here due to timeout
 	`, nil)
 
 	// Check that we got a context timeout error
