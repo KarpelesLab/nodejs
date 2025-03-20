@@ -306,7 +306,7 @@
 					if (typeof response.arrayBuffer === 'function') {
 						const arrayBuffer = await response.arrayBuffer();
 						
-						console.log("Body retrieved via arrayBuffer():", arrayBuffer.byteLength);
+						//console.log("Body retrieved via arrayBuffer():", arrayBuffer.byteLength);
 						
 						if (arrayBuffer.byteLength > 0) {
 							const text = Buffer.from(arrayBuffer).toString('base64');
@@ -322,7 +322,7 @@
 						// Use Response.text() method which returns a Promise of the body as text
 						const text = await response.text();
 						
-						console.log("Body retrieved via text():", text.length, "Content:", JSON.stringify(text));
+						//console.log("Body retrieved via text():", text.length, "Content:", JSON.stringify(text));
 						
 						// Send the text as a string directly to ensure proper transmission
 						pf.emit('send', {
@@ -340,9 +340,9 @@
 						} else {
 							text = Buffer.from(response.body).toString('base64');
 						}
-						
-						console.log("Body retrieved via body property:", text.length);
-						
+
+						//console.log("Body retrieved via body property:", text.length);
+
 						pf.emit('send', {
 							'action': 'response',
 							data: { 

@@ -127,210 +127,41 @@ func TestContextProxyHandler(t *testing.T) {
 		t.Fatalf("Failed to get process from pool: %v", err)
 	}
 
-	// Set up the proxy pattern for context handlers
-	proxySetupCode := `
-	// Keep track of contexts and their state
-	const contexts = {};
-	
-	// Create and setup a context
-	function setupContext(contextName) {
-		console.log("Setting up context:", contextName);
-		
-		// Create the VM context
-		platform.emit('create_context', {ctxid: contextName});
-		
-		// Initialize the context with required objects
-		platform.emit('eval_in_context', {
-			ctxid: contextName,
-			id: 'setup-' + contextName,
-			data: 'this.Response = Response; this.Headers = Headers; this.counter = 0;'
-		});
-		
-		// Define a handler function in the context
-		platform.emit('eval_in_context', {
-			ctxid: contextName,
-			id: 'handler-' + contextName,
-			data: 'this.handler = function(request) { this.counter++; return new Response(JSON.stringify({message: "Response from context", counter: this.counter, method: request.method}), {status: 200, headers: {"Content-Type": "application/json"}}); };'
-		});
-		
-		// Register the context
-		contexts[contextName] = {
-			name: contextName,
-			created: Date.now()
-		};
-		
-		console.log("Context setup complete:", contextName);
-		return true;
-	}
-	
-	// Create a proxy handler for a context
-	function createContextProxy(contextName) {
-		// Create the context if it doesn't exist
-		if (!contexts[contextName]) {
-			setupContext(contextName);
-		}
-		
-		// Define a global handler with the "context.handler" name format
-		// This will be called by Go's ServeHTTPToHandler
-		global[contextName + '.handler'] = async function(request) {
-			console.log("Proxy handler called for context:", contextName);
-			
-			// Convert the Request to a simpler object for the context
-			const reqData = {
-				method: request.method,
-				url: request.url,
-				path: request.path || '',
-				headers: {}
-			};
-			
-			// Copy request headers
-			for (const [key, value] of Object.entries(request.headers)) {
-				reqData.headers[key] = value;
-			}
-			
-			// Get request body if any
-			try {
-				reqData.body = await request.text();
-			} catch (e) {
-				console.log("Error reading request body:", e);
-				reqData.body = '';
-			}
-			
-			// Call the handler in the context and get the response
-			return new Promise((resolve, reject) => {
-				const execId = 'exec-' + Date.now();
-				
-				// One-time listener for the response
-				const responseHandler = (event) => {
-					if (event.action === 'response' && event.data && event.data.id === execId) {
-						// Remove the listener once we get a response
-						platform.removeListener('in', responseHandler);
-						
-						// Check for errors
-						if (event.data.error) {
-							reject(new Error(event.data.error));
-							return;
-						}
-						
-						// Process the result
-						try {
-							const result = event.data.res;
-							
-							// Create a Response object
-							resolve(new Response(
-								result.body || '',
-								{
-									status: result.status || 200,
-									headers: result.headers || {}
-								}
-							));
-						} catch (e) {
-							reject(e);
-						}
-					}
-				};
-				
-				// Listen for the response
-				platform.on('in', responseHandler);
-				
-				// Safety timeout
-				const timeout = setTimeout(() => {
-					platform.removeListener('in', responseHandler);
-					reject(new Error('Timeout waiting for context response'));
-				}, 5000);
-				
-				// Build the code to execute in context by concatenating strings
-				// instead of using template literals to avoid escaping issues
-				const code = [
-					"(async function() {",
-					"  try {",
-					"    // Make sure handler function exists",
-					"    if (typeof this.handler !== 'function') {",
-					"      throw new Error('Handler not defined in context');",
-					"    }",
-					"",
-					"    // Create a simple request object",
-					"    const req = {",
-					"      method: '" + reqData.method.replace(/'/g, "\\'") + "',",
-					"      url: '" + reqData.url.replace(/'/g, "\\'") + "',",
-					"      path: '" + reqData.path.replace(/'/g, "\\'") + "',",
-					"      headers: " + JSON.stringify(reqData.headers) + ",",
-					"      body: '" + reqData.body.replace(/'/g, "\\'") + "',",
-					"      text: function() { return Promise.resolve('" + reqData.body.replace(/'/g, "\\'") + "'); }",
-					"    };",
-					"",
-					"    // Call the handler",
-					"    console.log('Calling handler in context');",
-					"    const response = await Promise.resolve(this.handler(req));",
-					"",
-					"    // Validate response",
-					"    if (!response || typeof response !== 'object' || ", 
-					"        typeof response.headers !== 'object' || ", 
-					"        typeof response.status !== 'number') {",
-					"      throw new Error('Handler must return a Response object');",
-					"    }",
-					"",
-					"    // Extract response data",
-					"    let body = '';",
-					"    try {",
-					"      body = await response.text();",
-					"    } catch (e) {",
-					"      console.log('Error reading response body:', e);",
-					"    }",
-					"",
-					"    // Extract headers",
-					"    const headers = {};",
-					"    if (typeof response.headers.forEach === 'function') {",
-					"      response.headers.forEach((v, k) => { headers[k] = v; });",
-					"    } else if (typeof response.headers === 'object') {",
-					"      Object.assign(headers, response.headers);",
-					"    }",
-					"",
-					"    // Return structured response",
-					"    return {",
-					"      status: response.status,",
-					"      headers: headers,",
-					"      body: body",
-					"    };",
-					"  } catch (e) {",
-					"    console.log('Error in context handler:', e);",
-					"    throw e;",
-					"  }",
-					"})();"
-				].join('\n');
-				
-				// Execute in the context
-				platform.emit('eval_in_context', {
-					ctxid: contextName,
-					id: execId,
-					data: code
-				});
-			});
-		};
-		
-		console.log("Created proxy handler:", contextName + '.handler');
-		return contextName + '.handler';
-	}
-	
-	// Export the proxy creator function
-	global.createContextProxy = createContextProxy;
-	`
-
-	// Evaluate the proxy setup code
-	_, err = proc.Eval(context.Background(), proxySetupCode, nil)
-	if err != nil {
-		t.Fatalf("Failed to evaluate proxy setup: %v", err)
-	}
-
-	// Create a context proxy
+	// Create the context on the Go side
 	ctx := "testContext"
-	_, err = proc.Eval(context.Background(), `createContextProxy('`+ctx+`')`, nil)
+
+	// First, tell nodejs to create a VM context with this name
+	_, err = proc.Eval(context.Background(), `platform.emit('create_context', {ctxid: '`+ctx+`'})`, nil)
 	if err != nil {
-		t.Fatalf("Failed to create context proxy: %v", err)
+		t.Fatalf("Failed to create context: %v", err)
+	}
+
+	// Initialize the context with required objects and state
+	initContextCode := `platform.emit('eval_in_context', {
+		ctxid: '` + ctx + `',
+		id: 'setup-` + ctx + `',
+		data: 'this.counter = 0;'
+	});`
+
+	_, err = proc.Eval(context.Background(), initContextCode, nil)
+	if err != nil {
+		t.Fatalf("Failed to initialize context: %v", err)
+	}
+
+	// Define a handler function in the context
+	handlerCode := `platform.emit('eval_in_context', {
+		ctxid: '` + ctx + `',
+		id: 'handler-` + ctx + `',
+		data: 'this.handler = function(request) { this.counter++; return new Response(JSON.stringify({message: "Response from context", counter: this.counter, method: request.method}), {status: 200, headers: {"Content-Type": "application/json"}}); };'
+	});`
+
+	_, err = proc.Eval(context.Background(), handlerCode, nil)
+	if err != nil {
+		t.Fatalf("Failed to define handler in context: %v", err)
 	}
 
 	// Test the context handler
-	t.Run("Context Handler via Proxy", func(t *testing.T) {
+	t.Run("Context Handler via direct context", func(t *testing.T) {
 		// Create a test HTTP request
 		req := httptest.NewRequest(http.MethodGet, "http://localhost/context?param=value", nil)
 		req.Header.Set("X-Context-Test", "TestValue")
@@ -338,7 +169,7 @@ func TestContextProxyHandler(t *testing.T) {
 		// Create a test response recorder
 		w := httptest.NewRecorder()
 
-		// Serve the HTTP request to our context handler via proxy
+		// Serve the HTTP request to our context handler
 		// Use the "context.handler" name format
 		proc.ServeHTTPToHandler(ctx+".handler", w, req)
 
