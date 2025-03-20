@@ -33,7 +33,10 @@
 	};
 
 	const defaultContext = {
-		// No need to add Headers, Request, Response since they are globally available in Node.js 22+
+		// Make native fetch API classes available in contexts
+		Headers: globalThis.Headers,
+		Request: globalThis.Request,
+		Response: globalThis.Response
 	};
 
 	// Top-level event-based "platform" object
@@ -121,6 +124,10 @@
 
 				const sandbox = {
 					...defaultContext,
+					// Explicitly add Fetch API classes
+					Response: globalThis.Response,
+					Headers: globalThis.Headers,
+					Request: globalThis.Request,
 					console: {
 						log: function() {
 							platform.emit('send', {'action': 'console.log', 'context': ctxid, 'data': util.format.apply(this, arguments)});
@@ -271,6 +278,11 @@
 					throw new Error('Handler must return a Response object');
 				}
 				console.log("Response is valid");
+				console.log("Response details:", JSON.stringify({
+					status: response.status,
+					bodyType: typeof response.body,
+					headersType: typeof response.headers
+				}));
 				
 				// Send headers to Go
 				// Convert headers to object (handle different Headers implementations)
@@ -304,19 +316,16 @@
 						// Use Response.text() method which returns a Promise of the body as text
 						const text = await response.text();
 						
-						console.log("Body retrieved via text():", text.length);
+						console.log("Body retrieved via text():", text.length, "Content:", JSON.stringify(text));
 						
-						// Send the text as a Buffer
-						const buffer = Buffer.from(text);
-						if (buffer.length > 0) {
-							pf.emit('send', {
-								'action': 'response',
-								data: { 
-									id: reqID + '.body',
-									chunk: buffer
-								}
-							});
-						}
+						// Send the text as a string directly to ensure proper transmission
+						pf.emit('send', {
+							'action': 'response',
+							data: { 
+								id: reqID + '.body',
+								chunk: text
+							}
+						});
 					} else if (typeof response.arrayBuffer === 'function') {
 						// Try arrayBuffer method as backup
 						const arrayBuffer = await response.arrayBuffer();
@@ -324,46 +333,51 @@
 						console.log("Body retrieved via arrayBuffer():", arrayBuffer.byteLength);
 						
 						if (arrayBuffer.byteLength > 0) {
+							const text = Buffer.from(arrayBuffer).toString('utf8');
 							pf.emit('send', {
 								'action': 'response',
 								data: { 
 									id: reqID + '.body',
-									chunk: Buffer.from(arrayBuffer)
+									chunk: text
 								}
 							});
 						}
 					} else if (response._body !== undefined) {
 						// Our custom Response implementation
-						const body = typeof response._body === 'string' ? 
-							Buffer.from(response._body) : response._body;
-						
-						console.log("Body retrieved via _body:", body && body.length);
-						
-						if (body && body.length > 0) {
-							pf.emit('send', {
-								'action': 'response',
-								data: { 
-									id: reqID + '.body',
-									chunk: Buffer.from(body)
-								}
-							});
+						let text;
+						if (typeof response._body === 'string') {
+							text = response._body;
+						} else {
+							text = Buffer.from(response._body).toString('utf8');
 						}
+						
+						console.log("Body retrieved via _body:", text.length);
+						
+						pf.emit('send', {
+							'action': 'response',
+							data: { 
+								id: reqID + '.body',
+								chunk: text
+							}
+						});
 					} else if (response.body) {
 						// Direct body property
-						const body = typeof response.body === 'string' ? 
-							Buffer.from(response.body) : response.body;
-						
-						console.log("Body retrieved via body property:", body && body.length);
-						
-						if (body && body.length > 0) {
-							pf.emit('send', {
-								'action': 'response',
-								data: { 
-									id: reqID + '.body',
-									chunk: Buffer.from(body)
-								}
-							});
+						let text;
+						if (typeof response.body === 'string') {
+							text = response.body;
+						} else {
+							text = Buffer.from(response.body).toString('utf8');
 						}
+						
+						console.log("Body retrieved via body property:", text.length);
+						
+						pf.emit('send', {
+							'action': 'response',
+							data: { 
+								id: reqID + '.body',
+								chunk: text
+							}
+						});
 					}
 				} catch (bodyError) {
 					console.log(`Error getting response body: ${bodyError.toString()}`);
