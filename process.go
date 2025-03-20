@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -12,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"strings"
 	"sync"
 	"time"
 
@@ -445,22 +445,6 @@ func (p *Process) GetVersion(what string) string {
 	return v
 }
 
-// SetHTTPHandler is deprecated. Use ServeHTTPToHandler with a handler function name instead.
-// This function will be removed in a future version.
-func (p *Process) SetHTTPHandler(name, handlerCode string) error {
-	var code string
-
-	// Check if name contains a dot (e.g., "myContext.handler")
-	if strings.Contains(name, ".") {
-		code = fmt.Sprintf(`%s = %s;`, name, handlerCode)
-	} else {
-		code = fmt.Sprintf(`global.%s = %s;`, name, handlerCode)
-	}
-
-	_, err := p.Eval(context.Background(), code, nil)
-	return err
-}
-
 func (p *Process) ping(cnt int) time.Duration {
 	var res time.Duration
 	success := 0
@@ -659,7 +643,12 @@ bodyLoop:
 					break bodyLoop
 				}
 			} else if chunk, ok := bodyChunk["chunk"].(string); ok {
-				_, err := w.Write([]byte(chunk))
+				chunkData, err := base64.StdEncoding.DecodeString(chunk)
+				if err != nil {
+					slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] failed to decode response chunk: %s", err), "platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_write_fail")
+					break bodyLoop
+				}
+				_, err = w.Write(chunkData)
 				if err != nil {
 					slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] failed to write response chunk: %s", err),
 						"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_write_fail")

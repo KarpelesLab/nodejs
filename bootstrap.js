@@ -311,8 +311,22 @@
 				
 				// Get response body as buffer and send it
 				try {
-					// First try text() since it's more reliable with standard Response
-					if (typeof response.text === 'function') {
+					if (typeof response.arrayBuffer === 'function') {
+						const arrayBuffer = await response.arrayBuffer();
+						
+						console.log("Body retrieved via arrayBuffer():", arrayBuffer.byteLength);
+						
+						if (arrayBuffer.byteLength > 0) {
+							const text = Buffer.from(arrayBuffer).toString('base64');
+							pf.emit('send', {
+								'action': 'response',
+								data: { 
+									id: reqID + '.body',
+									chunk: text
+								}
+							});
+						}
+					} else if (typeof response.text === 'function') {
 						// Use Response.text() method which returns a Promise of the body as text
 						const text = await response.text();
 						
@@ -326,47 +340,13 @@
 								chunk: text
 							}
 						});
-					} else if (typeof response.arrayBuffer === 'function') {
-						// Try arrayBuffer method as backup
-						const arrayBuffer = await response.arrayBuffer();
-						
-						console.log("Body retrieved via arrayBuffer():", arrayBuffer.byteLength);
-						
-						if (arrayBuffer.byteLength > 0) {
-							const text = Buffer.from(arrayBuffer).toString('utf8');
-							pf.emit('send', {
-								'action': 'response',
-								data: { 
-									id: reqID + '.body',
-									chunk: text
-								}
-							});
-						}
-					} else if (response._body !== undefined) {
-						// Our custom Response implementation
-						let text;
-						if (typeof response._body === 'string') {
-							text = response._body;
-						} else {
-							text = Buffer.from(response._body).toString('utf8');
-						}
-						
-						console.log("Body retrieved via _body:", text.length);
-						
-						pf.emit('send', {
-							'action': 'response',
-							data: { 
-								id: reqID + '.body',
-								chunk: text
-							}
-						});
 					} else if (response.body) {
 						// Direct body property
 						let text;
 						if (typeof response.body === 'string') {
-							text = response.body;
+							text = Buffer.from(response.body, 'utf8').toString('base64');
 						} else {
-							text = Buffer.from(response.body).toString('utf8');
+							text = Buffer.from(response.body).toString('base64');
 						}
 						
 						console.log("Body retrieved via body property:", text.length);

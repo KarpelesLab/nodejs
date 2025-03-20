@@ -9,10 +9,10 @@ import (
 )
 
 func BenchmarkEval(b *testing.B) {
-	// Skip the benchmark if NodeJS is not available
+	// Check NodeJS availability
 	_, err := nodejs.New()
 	if err != nil {
-		b.Skip("NodeJS not available, skipping benchmark")
+		b.Fatalf("NodeJS not available: %s", err)
 	}
 
 	// Setup
@@ -32,19 +32,16 @@ func BenchmarkEval(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_, err := proc.Eval(ctx, "1+1", nil)
 		if err != nil {
-			if err.Error() == "TypeError: Cannot read properties of undefined (reading 'endsWith')" {
-				b.Skip("Bootstrap issue, skipping benchmark")
-			}
 			b.Fatalf("eval failed: %s", err)
 		}
 	}
 }
 
 func BenchmarkPooledEval(b *testing.B) {
-	// Skip the benchmark if NodeJS is not available
+	// Check NodeJS availability
 	f, err := nodejs.New()
 	if err != nil {
-		b.Skip("NodeJS not available, skipping benchmark")
+		b.Fatalf("NodeJS not available: %s", err)
 	}
 
 	// Create a pool
@@ -68,9 +65,6 @@ func BenchmarkPooledEval(b *testing.B) {
 		_, err = proc.Eval(ctx, "1+1", nil)
 		if err != nil {
 			proc.Close()
-			if err.Error() == "TypeError: Cannot read properties of undefined (reading 'endsWith')" {
-				b.Skip("Bootstrap issue, skipping benchmark")
-			}
 			b.Fatalf("eval failed: %s", err)
 		}
 		proc.Close()
