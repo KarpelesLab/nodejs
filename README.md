@@ -12,6 +12,8 @@ A Go library that provides seamless integration with NodeJS, allowing Go program
 - **JavaScript Execution**: Run JS code with precise control and error handling
 - **IPC Communication**: Bidirectional communication between Go and JavaScript
 - **Health Monitoring**: Built-in process health checks and responsiveness verification
+- **Isolated Contexts**: Create isolated JavaScript execution contexts within a process
+- **HTTP Integration**: Serve HTTP requests directly to JavaScript handlers
 
 ## Installation
 
@@ -108,6 +110,90 @@ process.Run(`
 ```
 
 ### Advanced Features
+
+#### Isolated JavaScript Contexts
+
+JavaScript contexts provide isolated execution environments within a single NodeJS process:
+
+```go
+// Create a NodeJS process
+proc, err := factory.New()
+if err != nil {
+    // handle error
+}
+defer proc.Close()
+
+// Create an isolated JavaScript context
+jsCtx, err := proc.NewContext()
+if err != nil {
+    // handle error
+}
+defer jsCtx.Close()
+
+// Execute JavaScript in the context
+ctx := context.Background()
+result, err := jsCtx.Eval(ctx, "var counter = 1; counter++;", nil)
+if err != nil {
+    // handle error
+}
+fmt.Println("Result:", result) // Output: Result: 2
+
+// Create a second isolated context
+jsCtx2, err := proc.NewContext()
+if err != nil {
+    // handle error
+}
+defer jsCtx2.Close()
+
+// The second context has its own independent environment
+result2, err := jsCtx2.Eval(ctx, "typeof counter", nil)
+if err != nil {
+    // handle error
+}
+fmt.Println("Result2:", result2) // Output: Result2: undefined
+```
+
+#### HTTP Integration with JavaScript Handlers
+
+You can serve HTTP requests directly to JavaScript handlers:
+
+```go
+// Create a JavaScript context
+jsCtx, err := proc.NewContext()
+if err != nil {
+    // handle error
+}
+defer jsCtx.Close()
+
+// Define a JavaScript HTTP handler
+_, err = jsCtx.Eval(context.Background(), `
+// Define a handler function
+this.apiHandler = function(request) {
+    // Create response body
+    const body = JSON.stringify({
+        message: "Hello, World!",
+        method: request.method,
+        path: request.url
+    });
+    
+    // Return a Response object (Fetch API compatible)
+    return new Response(body, {
+        status: 200,
+        headers: {
+            "Content-Type": "application/json"
+        }
+    });
+};
+`, nil)
+
+// Create an HTTP handler that delegates to the JavaScript context
+http.HandleFunc("/api", func(w http.ResponseWriter, r *http.Request) {
+    jsCtx.ServeHTTPToHandler("apiHandler", w, r)
+})
+
+// Start the HTTP server
+http.ListenAndServe(":8080", nil)
+```
 
 #### Custom Timeouts
 
