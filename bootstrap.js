@@ -9,182 +9,10 @@
 	const vm = require('vm');
 	const stream = require('stream');
 
-	// ---- Web API Compatible Classes ----
-	// Request and Response classes compatible with the Fetch API
-	
-	// Headers class implementation similar to the Web API
-	class Headers {
-		constructor(init) {
-			this._headers = new Map();
-			
-			if (init) {
-				if (init instanceof Headers) {
-					for (const [key, value] of init._headers.entries()) {
-						this.set(key, value);
-					}
-				} else if (Array.isArray(init)) {
-					init.forEach(([key, value]) => this.append(key, value));
-				} else if (typeof init === 'object') {
-					Object.entries(init).forEach(([key, value]) => this.set(key, value));
-				}
-			}
-		}
-		
-		append(name, value) {
-			name = name.toLowerCase();
-			if (!this._headers.has(name)) {
-				this.set(name, value);
-			} else {
-				let current = this._headers.get(name);
-				if (!Array.isArray(current)) {
-					current = [current];
-				}
-				current.push(value);
-				this._headers.set(name, current);
-			}
-		}
-		
-		delete(name) {
-			this._headers.delete(name.toLowerCase());
-		}
-		
-		get(name) {
-			const value = this._headers.get(name.toLowerCase());
-			if (Array.isArray(value)) {
-				return value.join(', ');
-			}
-			return value || null;
-		}
-		
-		has(name) {
-			return this._headers.has(name.toLowerCase());
-		}
-		
-		set(name, value) {
-			this._headers.set(name.toLowerCase(), value);
-		}
-		
-		forEach(callback, thisArg) {
-			for (const [name, value] of this._headers.entries()) {
-				callback.call(thisArg, value, name, this);
-			}
-		}
-		
-		// Convert to object for serialization
-		toObject() {
-			const obj = {};
-			this._headers.forEach((value, key) => {
-				obj[key] = value;
-			});
-			return obj;
-		}
-	}
-	
-	// Body mixin implementation
-	const BodyMixin = {
-		arrayBuffer() {
-			if (this._bodyInitialized) {
-				return Promise.resolve(this._body);
-			}
-			return Promise.resolve(Buffer.from(this._body || ''));
-		},
-		
-		text() {
-			if (this._bodyInitialized && typeof this._body === 'string') {
-				return Promise.resolve(this._body);
-			}
-			return this.arrayBuffer()
-				.then(buffer => buffer.toString());
-		},
-		
-		json() {
-			return this.text()
-				.then(text => JSON.parse(text));
-		},
-		
-		_initBody(body) {
-			this._bodyInitialized = true;
-			this._body = body || null;
-		}
-	};
-	
-	// Request class implementation
-	class Request {
-		constructor(input, init = {}) {
-			// Initialize with defaults
-			this.method = 'GET';
-			this.headers = new Headers();
-			this.redirect = 'follow';
-			this.signal = null;
-			this._initBody(null);
-			
-			// Process input
-			if (input instanceof Request) {
-				this.method = input.method;
-				this.headers = new Headers(input.headers);
-				this.url = input.url;
-				this._initBody(input._body);
-			} else if (typeof input === 'string') {
-				this.url = input;
-			} else if (typeof input === 'object') {
-				Object.assign(this, input);
-				if (input.headers) {
-					this.headers = new Headers(input.headers);
-				}
-				if (input.body) {
-					this._initBody(input.body);
-				}
-			}
-			
-			// Override with init
-			if (init) {
-				if (init.method) this.method = init.method;
-				if (init.headers) this.headers = new Headers(init.headers);
-				if (init.body !== undefined) this._initBody(init.body);
-				if (init.redirect) this.redirect = init.redirect;
-				if (init.signal) this.signal = init.signal;
-			}
-			
-			// Uppercase method
-			this.method = this.method.toUpperCase();
-		}
-	}
-	
-	// Add Body methods to Request.prototype
-	Object.assign(Request.prototype, BodyMixin);
-	
-	// Response class implementation
-	class Response {
-		constructor(body = null, init = {}) {
-			this.status = init.status || 200;
-			this.statusText = init.statusText || '';
-			this.headers = new Headers(init.headers);
-			this.ok = this.status >= 200 && this.status < 300;
-			this.type = 'default';
-			this.url = init.url || '';
-			this._initBody(body);
-		}
-		
-		clone() {
-			return new Response(this._body, {
-				status: this.status,
-				statusText: this.statusText,
-				headers: new Headers(this.headers),
-				url: this.url
-			});
-		}
-	}
-	
-	// Add Body methods to Response.prototype
-	Object.assign(Response.prototype, BodyMixin);
-	
-	// Static methods for Response
-	Response.error = () => new Response(null, { status: 0, statusText: '' });
-	Response.redirect = (url, status = 302) => {
-		const response = new Response(null, { status });
-		response.headers.set('Location', url);
-		return response;
-	};
+	// Node.js 22+ includes native Fetch API classes:
+	// - Headers
+	// - Request
+	// - Response
 	
 	// Basic linker for ES modules
 	const basicLinker = async function(specifier) {
@@ -202,12 +30,11 @@
 				);
 			case "web-api":
 				// Create a synthetic module for Web API compatibility
+				// No need to export Headers, Request, Response as they are globally available in Node.js 22+
 				return new vm.SyntheticModule(
-					['Request', 'Response', 'Headers'],
+					[],
 					function init() {
-						this.setExport('Request', Request);
-						this.setExport('Response', Response);
-						this.setExport('Headers', Headers);
+						// Empty init - classes are already available
 					},
 					{ identifier: 'synthetic:web-api' },
 				);
@@ -216,9 +43,7 @@
 	};
 
 	const defaultContext = {
-		Request,
-		Response,
-		Headers
+		// No need to add Headers, Request, Response since they are globally available in Node.js 22+
 	};
 
 	// Top-level event-based "platform" object
@@ -428,7 +253,7 @@
 				return;
 			}
 
-			// Create a Request object compatible with Fetch API
+			// Create a Request object using native Request from nodejs
 			const request = new Request(data.url, {
 				method: data.method,
 				headers: data.headers,
@@ -447,30 +272,111 @@
 				const response = await responsePromise;
 				
 				// Validate the response
-				if (!(response instanceof Response)) {
+				console.log("Response check:", response?.constructor?.name, typeof response);
+				// Due to JavaScript context differences, instanceof may not work across contexts
+				// Instead, check if it has the expected Response properties
+				if (!response || typeof response !== 'object' || 
+					typeof response.headers !== 'object' || 
+					typeof response.status !== 'number') {
 					throw new Error('Handler must return a Response object');
 				}
+				console.log("Response is valid");
 				
 				// Send headers to Go
+				// Convert headers to object (handle different Headers implementations)
+				const headersObj = {};
+				// Extract headers from the native Headers object or a plain object
+				if (typeof response.headers.forEach === 'function') {
+					// Standard Headers object with forEach method
+					response.headers.forEach((value, key) => {
+						headersObj[key] = value;
+					});
+				} else if (typeof response.headers === 'object') {
+					// Plain object with headers as properties
+					Object.assign(headersObj, response.headers);
+				}
+				
+				console.log("Headers object:", headersObj);
+				
 				pf.emit('send', {
 					'action': 'response',
 					data: { 
 						id: reqID + '.headers', 
 						statusCode: response.status,
-						headers: response.headers.toObject()
+						headers: headersObj
 					}
 				});
 				
 				// Get response body as buffer and send it
-				const body = await response.arrayBuffer();
-				if (body && body.length > 0) {
-					pf.emit('send', {
-						'action': 'response',
-						data: { 
-							id: reqID + '.body',
-							chunk: Buffer.from(body)
+				try {
+					// First try text() since it's more reliable with standard Response
+					if (typeof response.text === 'function') {
+						// Use Response.text() method which returns a Promise of the body as text
+						const text = await response.text();
+						
+						console.log("Body retrieved via text():", text.length);
+						
+						// Send the text as a Buffer
+						const buffer = Buffer.from(text);
+						if (buffer.length > 0) {
+							pf.emit('send', {
+								'action': 'response',
+								data: { 
+									id: reqID + '.body',
+									chunk: buffer
+								}
+							});
 						}
-					});
+					} else if (typeof response.arrayBuffer === 'function') {
+						// Try arrayBuffer method as backup
+						const arrayBuffer = await response.arrayBuffer();
+						
+						console.log("Body retrieved via arrayBuffer():", arrayBuffer.byteLength);
+						
+						if (arrayBuffer.byteLength > 0) {
+							pf.emit('send', {
+								'action': 'response',
+								data: { 
+									id: reqID + '.body',
+									chunk: Buffer.from(arrayBuffer)
+								}
+							});
+						}
+					} else if (response._body !== undefined) {
+						// Our custom Response implementation
+						const body = typeof response._body === 'string' ? 
+							Buffer.from(response._body) : response._body;
+						
+						console.log("Body retrieved via _body:", body && body.length);
+						
+						if (body && body.length > 0) {
+							pf.emit('send', {
+								'action': 'response',
+								data: { 
+									id: reqID + '.body',
+									chunk: Buffer.from(body)
+								}
+							});
+						}
+					} else if (response.body) {
+						// Direct body property
+						const body = typeof response.body === 'string' ? 
+							Buffer.from(response.body) : response.body;
+						
+						console.log("Body retrieved via body property:", body && body.length);
+						
+						if (body && body.length > 0) {
+							pf.emit('send', {
+								'action': 'response',
+								data: { 
+									id: reqID + '.body',
+									chunk: Buffer.from(body)
+								}
+							});
+						}
+					}
+				} catch (bodyError) {
+					console.log(`Error getting response body: ${bodyError.toString()}`);
 				}
 				
 				// Signal response completion

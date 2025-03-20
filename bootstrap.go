@@ -10,3 +10,8 @@ import (
 var bootstrapJs string
 
 var bootstrapEnc, _ = pjson.Marshal(bootstrapJs)
+
+// GetBootstrapContent returns the raw bootstrap.js content (for debugging)
+func GetBootstrapContent() string {
+	return bootstrapJs
+}
