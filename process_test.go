@@ -2,6 +2,7 @@ package nodejs_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -116,7 +117,7 @@ func TestProcessConsole(t *testing.T) {
 	// Check both stdout and stderr are captured
 	if !time.AfterFunc(500*time.Millisecond, func() {
 		// This is a bit hacky but adequate for the test
-		if !containsString(output, "Test console output") || !containsString(output, "Test error output") {
+		if !strings.HasPrefix(output, "Test console output") || !strings.HasPrefix(output, "Test error output") {
 			t.Errorf("expected console output to contain both stdout and stderr messages")
 		}
 	}).Stop() {

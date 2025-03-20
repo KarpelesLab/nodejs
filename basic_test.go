@@ -35,6 +35,4 @@ func TestBasicFunctionality(t *testing.T) {
 	if result != float64(4) {
 		t.Errorf("expected 4 but got %v", result)
 	}
-
-	logIfVerbose(t, "Basic evaluation successful")
 }
