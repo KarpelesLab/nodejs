@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 
 	"github.com/KarpelesLab/rndstr"
@@ -91,9 +92,11 @@ func (c *Context) Close() error {
 	return nil
 }
 
-// Eval executes JavaScript code within this context and returns the result.
-// It takes a Go context for timeout/cancellation and options for execution.
-func (c *Context) Eval(ctx context.Context, code string, opts map[string]any) (any, error) {
+// EvalChannel executes JavaScript code within this context and returns a channel
+// that will receive the evaluation result when available.
+// Unlike Eval, this method doesn't wait for the result and returns immediately.
+// The caller is responsible for monitoring the channel for results.
+func (c *Context) EvalChannel(code string, opts map[string]any) (chan map[string]any, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -105,8 +108,10 @@ func (c *Context) Eval(ctx context.Context, code string, opts map[string]any) (a
 		opts = map[string]any{}
 	}
 
-	// Send eval_in_context command to NodeJS
+	// Get a response channel
 	id, ch := c.proc.MakeResponse()
+
+	// Send eval_in_context command to NodeJS
 	err := c.proc.send(map[string]any{
 		"action": "eval_in_context",
 		"id":     id,
@@ -114,6 +119,50 @@ func (c *Context) Eval(ctx context.Context, code string, opts map[string]any) (a
 		"data":   code,
 		"opts":   opts,
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	return ch, nil
+}
+
+// ServeHTTPToHandler serves an HTTP request to a JavaScript handler function within this context.
+// It converts the HTTP request to a JavaScript Fetch API compatible Request, calls the specified handler,
+// and streams the Response back to the Go ResponseWriter.
+//
+// The handlerFunc parameter is the name of the JavaScript handler function to call within this context.
+// The handler function should accept a Request object and return a Response object.
+//
+// Example JavaScript handler:
+//
+//	// In the context:
+//	handler = function(request) {
+//	  return new Response(JSON.stringify({hello: 'world'}), {
+//	    status: 200,
+//	    headers: {'Content-Type': 'application/json'}
+//	  });
+//	}
+func (c *Context) ServeHTTPToHandler(handlerFunc string, w http.ResponseWriter, r *http.Request) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.closed {
+		http.Error(w, "Context is closed", http.StatusInternalServerError)
+		return
+	}
+
+	// Create a fully qualified handler name that includes the context ID
+	fullHandlerName := c.id + "." + handlerFunc
+
+	// Delegate to the underlying Process's ServeHTTPToHandler method
+	c.proc.ServeHTTPToHandler(fullHandlerName, w, r)
+}
+
+// Eval executes JavaScript code within this context and returns the result.
+// It takes a Go context for timeout/cancellation and options for execution.
+func (c *Context) Eval(ctx context.Context, code string, opts map[string]any) (any, error) {
+	// Get a channel that will receive the evaluation result
+	ch, err := c.EvalChannel(code, opts)
 	if err != nil {
 		return nil, err
 	}

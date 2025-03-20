@@ -142,3 +142,70 @@ func Example_contextWithTimeout() {
 		fmt.Println("Execution completed, which was not expected")
 	}
 }
+
+func Example_contextWithEvalChannel() {
+	// Create a new NodeJS factory
+	factory, err := nodejs.New()
+	if err != nil {
+		log.Fatalf("Failed to create factory: %v", err)
+	}
+
+	// Create a new NodeJS process
+	proc, err := factory.New()
+	if err != nil {
+		log.Fatalf("Failed to create process: %v", err)
+	}
+	defer proc.Close()
+
+	// Create a JavaScript context
+	jsCtx, err := proc.NewContext()
+	if err != nil {
+		log.Fatalf("Failed to create JavaScript context: %v", err)
+	}
+	defer jsCtx.Close()
+
+	// Use EvalChannel for asynchronous execution
+	resultChan, err := jsCtx.EvalChannel(`
+		// This function simulates a database query that takes time
+		async function fetchUserData() {
+			// Simple async operation that doesn't rely on setTimeout
+			await Promise.resolve(); 
+			return {
+				id: 123,
+				name: "John Doe",
+				email: "john@example.com"
+			};
+		}
+		
+		// Call the async function and return its result
+		fetchUserData();
+	`, nil)
+
+	if err != nil {
+		log.Fatalf("Failed to start async evaluation: %v", err)
+	}
+
+	// Do other work while waiting for the result
+	fmt.Println("Async evaluation started, doing other work...")
+
+	// Wait for the result from the channel
+	select {
+	case result := <-resultChan:
+		// Check for errors
+		if errMsg, ok := result["error"].(string); ok {
+			fmt.Printf("Error from JavaScript: %s\n", errMsg)
+			return
+		}
+
+		// Process the result
+		if userData, ok := result["res"].(map[string]interface{}); ok {
+			fmt.Printf("User ID: %v\n", userData["id"])
+			fmt.Printf("User Name: %s\n", userData["name"])
+			fmt.Printf("User Email: %s\n", userData["email"])
+		} else {
+			fmt.Printf("Unexpected result type: %T\n", result["res"])
+		}
+	case <-time.After(1 * time.Second):
+		fmt.Println("Timed out waiting for result")
+	}
+}

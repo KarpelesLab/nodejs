@@ -188,3 +188,83 @@ func TestContextClose(t *testing.T) {
 		t.Errorf("Expected error when using closed context but got nil")
 	}
 }
+
+func TestContextEvalChannel(t *testing.T) {
+	factory, err := New()
+	if err != nil {
+		t.Fatalf("Failed to create factory: %v", err)
+	}
+
+	proc, err := factory.New()
+	if err != nil {
+		t.Fatalf("Failed to create process: %v", err)
+	}
+	defer proc.Close()
+
+	jsCtx, err := proc.NewContext()
+	if err != nil {
+		t.Fatalf("Failed to create JavaScript context: %v", err)
+	}
+	defer jsCtx.Close()
+
+	// Simple evaluation using EvalChannel
+	resChan, err := jsCtx.EvalChannel("40 + 2", nil)
+	if err != nil {
+		t.Fatalf("Failed to execute EvalChannel: %v", err)
+	}
+
+	// Wait for the result
+	select {
+	case res := <-resChan:
+		// Check for error
+		if errMsg, ok := res["error"].(string); ok {
+			t.Fatalf("Received error from JavaScript: %s", errMsg)
+		}
+
+		// Check result value
+		result, ok := res["res"].(float64)
+		if !ok {
+			t.Fatalf("Expected float64 result, got %T", res["res"])
+		}
+
+		if result != 42 {
+			t.Errorf("Expected result to be 42, got %v", result)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatalf("Timed out waiting for result")
+	}
+
+	// Test with async JavaScript - don't rely on setTimeout which isn't in VM context by default
+	resChan, err = jsCtx.EvalChannel(`
+		async function slowAdd(a, b) {
+			// Simple async operation using Promise directly
+			await Promise.resolve();
+			return a + b;
+		}
+		slowAdd(20, 22)
+	`, nil)
+	if err != nil {
+		t.Fatalf("Failed to execute async EvalChannel: %v", err)
+	}
+
+	// Wait for the result
+	select {
+	case res := <-resChan:
+		// Check for error
+		if errMsg, ok := res["error"].(string); ok {
+			t.Fatalf("Received error from async JavaScript: %s", errMsg)
+		}
+
+		// Check result value
+		result, ok := res["res"].(float64)
+		if !ok {
+			t.Fatalf("Expected float64 result from async code, got %T", res["res"])
+		}
+
+		if result != 42 {
+			t.Errorf("Expected async result to be 42, got %v", result)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatalf("Timed out waiting for async result")
+	}
+}
