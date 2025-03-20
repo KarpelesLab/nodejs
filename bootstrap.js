@@ -1,9 +1,13 @@
+'use strict';
+
 /**
  * Bootstrap script for NodeJS integration with Go.
  * This script sets up communication channels, event handling, and virtual context support
  * to allow Go code to execute JavaScript in a controlled environment.
  */
 (function() {
+	'use strict';
+	
 	const EventEmitter = require('events');
 	const util = require('util');
 	const vm = require('vm');
@@ -15,7 +19,7 @@
 	// - Response
 	
 	// Basic linker for ES modules
-	const basicLinker = async function(specifier) {
+	const basicLinker = async (specifier) => {
 		switch(specifier) {
 			case "node:stream":
 				const mod = await import(specifier);
@@ -26,7 +30,7 @@
 						for (const k of keys)
 							this.setExport(k, mod[k]);
 					},
-					{ identifier: 'synthetic:'+specifier },
+					{ identifier: `synthetic:${specifier}` },
 				);
 		}
 		throw new Error(`Unknown import: ${specifier}`);
@@ -41,10 +45,10 @@
 
 	// Top-level event-based "platform" object
 	const platform = function() {
-		let pf = new EventEmitter();
+		const pf = new EventEmitter();
 		let buff = "";
 		let ipcid = 0;
-		let ipccb = {};
+		const ipccb = {};
 
 		pf.on('send', data => process.stdout.write(JSON.stringify(data)+'\n'));
 		pf.on('raw_in', data => pf.emit('in', JSON.parse(data)));
@@ -56,7 +60,7 @@
 			try {
 				msg.opts = msg.opts || {}; // Ensure opts exists
 				if (msg.opts.filename && msg.opts.filename.endsWith(".mjs")) {
-					let mod = new vm.SourceTextModule(msg.data, msg.opts);
+					const mod = new vm.SourceTextModule(msg.data, msg.opts);
 					await mod.link(basicLinker);
 					await mod.evaluate();
 					global.exports = mod.namespace;
@@ -65,7 +69,7 @@
 						data: { id: msg.id, res: true }
 					});
 				} else {
-					let res = vm.runInThisContext(msg.data, msg.opts);
+					const res = vm.runInThisContext(msg.data, msg.opts);
 					if (msg.id) {
 						Promise.resolve(res).then(value => {
 							pf.emit('send', {
@@ -98,12 +102,12 @@
 			pf.emit('send', {'action':'ipc.req','id':ipcid++,'data': data.args});
 		});
 		pf.on('ipc.success', (msg) => {
-			let v = ipccb[msg.id];
+			const v = ipccb[msg.id];
 			delete ipccb[msg.id];
 			v.ok(msg.data);
 		});
 		pf.on('ipc.failure', (msg) => {
-			let v = ipccb[msg.id];
+			const v = ipccb[msg.id];
 			delete ipccb[msg.id];
 			v.fail(msg.data);
 		});
@@ -129,8 +133,8 @@
 					Headers: globalThis.Headers,
 					Request: globalThis.Request,
 					console: {
-						log: function() {
-							platform.emit('send', {'action': 'console.log', 'context': ctxid, 'data': util.format.apply(this, arguments)});
+						log: (...args) => {
+							platform.emit('send', {'action': 'console.log', 'context': ctxid, 'data': util.format(...args)});
 						},
 					},
 				};
@@ -164,7 +168,7 @@
 
 				// If it's .mjs, treat it like a module
 				if (msg.opts.filename && msg.opts.filename.endsWith(".mjs")) {
-					let mod = new vm.SourceTextModule(msg.data, { ...msg.opts, context });
+					const mod = new vm.SourceTextModule(msg.data, { ...msg.opts, context });
 					await mod.link(basicLinker);
 					await mod.evaluate();
 					// if you want the namespace, it is mod.namespace
@@ -175,7 +179,7 @@
 					});
 				} else {
 					// plain script
-					let res = vm.runInContext(msg.data, context, msg.opts);
+					const res = vm.runInContext(msg.data, context, msg.opts);
 					if (msg.id) {
 						Promise.resolve(res).then(value => {
 							pf.emit('send', {
@@ -308,57 +312,58 @@
 				// Get response body as buffer and send it
 				// Handle different kinds of responses
 				try {
+					let bodyContent = null;
+					
+					// First try to get the complete body content using the most appropriate method
 					if (typeof response.arrayBuffer === 'function') {
-						const arrayBuffer = await response.arrayBuffer();
-						
-						//console.log("Body retrieved via arrayBuffer():", arrayBuffer.byteLength);
-						
-						if (arrayBuffer.byteLength > 0) {
-							const text = Buffer.from(arrayBuffer).toString('base64');
-							pf.emit('send', {
-								'action': 'response',
-								data: { 
-									id: reqID + '.body',
-									chunk: text
-								}
-							});
+						try {
+							const arrayBuffer = await response.arrayBuffer();
+							if (arrayBuffer && arrayBuffer.byteLength > 0) {
+								bodyContent = Buffer.from(arrayBuffer).toString('base64');
+							}
+						} catch (err) {
+							console.log(`Error extracting arrayBuffer: ${err}`);
 						}
 					} else if (typeof response.text === 'function') {
-						// Use Response.text() method which returns a Promise of the body as text
-						const text = await response.text();
-						
-						//console.log("Body retrieved via text():", text.length, "Content:", JSON.stringify(text));
-						
-						// Send the text as a string directly to ensure proper transmission
-						pf.emit('send', {
-							'action': 'response',
-							data: { 
-								id: reqID + '.body',
-								chunk: text
+						try {
+							// Use Response.text() method which returns a Promise of the body as text
+							const text = await response.text();
+							if (text && text.length > 0) {
+								bodyContent = text;
 							}
-						});
-					} else if (response.body) {
-						// Direct body property
-						let text;
-						if (typeof response.body === 'string') {
-							text = Buffer.from(response.body, 'utf8').toString('base64');
-						} else {
-							text = Buffer.from(response.body).toString('base64');
+						} catch (err) {
+							console.log(`Error extracting text: ${err}`);
 						}
-
-						//console.log("Body retrieved via body property:", text.length);
-
+					} else if (response.body) {
+						try {
+							// Direct body property
+							if (typeof response.body === 'string') {
+								bodyContent = Buffer.from(response.body, 'utf8').toString('base64');
+							} else {
+								bodyContent = Buffer.from(response.body).toString('base64');
+							}
+						} catch (err) {
+							console.log(`Error extracting body: ${err}`);
+						}
+					}
+					
+					// Only after we have the full body content, send it to Go
+					if (bodyContent !== null) {
+						// Ensure we send the body first, then wait before sending done
 						pf.emit('send', {
 							'action': 'response',
 							data: { 
 								id: reqID + '.body',
-								chunk: text
+								chunk: bodyContent
 							}
 						});
 					}
 				} catch (bodyError) {
 					console.log(`Error getting response body: ${bodyError.toString()}`);
 				}
+				
+				// Wait a small amount of time to ensure that body content is fully processed
+				await new Promise(resolve => setTimeout(resolve, 10));
 				
 				// Signal response completion
 				pf.emit('send', {
@@ -395,7 +400,7 @@
 		// Handle incoming data from stdin
 		process.stdin.on('data', data => {
 			buff += data;
-			let lines = buff.split(/\n/);
+			const lines = buff.split(/\n/);
 			buff = lines.pop();
 			lines.forEach(line => pf.emit('raw_in', line));
 		}).on('end', () => {
@@ -411,19 +416,19 @@
 	global.platform = platform;
 
 	// Simple IPC promise helper
-	global.platform_ipc = function(cmd) {
+	global.platform_ipc = (cmd) => {
 		return new Promise((ok, fail) => {
 			global.platform.emit('ipc', { cb: { ok, fail }, args: cmd });
 		});
 	};
 
 	// Some convenience wrappers
-	global.__platformRest = function(name, verb, params, callback) {
+	global.__platformRest = (name, verb, params, callback) => {
 		global.platform_ipc({ipc: 'rest', name, verb, params})
 			.then(res => callback(res, undefined))
 			.catch(res => callback(undefined, res));
 	};
-	global.__platformSetCookie = function(name, value, expiration) {
+	global.__platformSetCookie = (name, value, expiration) => {
 		global.platform_ipc({ipc: 'set_cookie', name, value, expiration})
 			.catch(e => {});
 	};
@@ -435,10 +440,10 @@
 	defaultContext.__platformAsyncRest = global.__platformAsyncRest;
 
 	// Override console.log so it is routed out via platform
-	console.log = function() {
+	console.log = (...args) => {
 		platform.emit('send', {
 			'action': 'console.log',
-			'data': util.format.apply(this, arguments)
+			'data': util.format(...args)
 		});
 	};
 
