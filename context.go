@@ -151,11 +151,20 @@ func (c *Context) ServeHTTPToHandler(handlerFunc string, w http.ResponseWriter, 
 		return
 	}
 
-	// Create a fully qualified handler name that includes the context ID
-	fullHandlerName := c.id + "." + handlerFunc
+	// Create HTTP handler options with this context's ID
+	options := HTTPHandlerOptions{
+		Context: c.id,
+	}
 
-	// Delegate to the underlying Process's ServeHTTPToHandler method
-	c.proc.ServeHTTPToHandler(fullHandlerName, w, r)
+	// Use the ServeHTTPWithOptions method
+	c.proc.ServeHTTPWithOptions(handlerFunc, options, w, r)
+}
+
+// ID returns the unique identifier for this JavaScript context.
+// This ID can be used when calling ServeHTTPWithOptions to specify
+// the context in which to execute the handler function.
+func (c *Context) ID() string {
+	return c.id
 }
 
 // Eval executes JavaScript code within this context and returns the result.

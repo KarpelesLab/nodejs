@@ -220,13 +220,18 @@
 		// ---- HTTP SUPPORT ----
 		// Handle HTTP requests from Go
 		pf.on('http.request', async (msg) => {
-			const { id, reqID, handler, data } = msg;
+			const { id, reqID, handler, data, context: contextId } = msg;
 			
 			// Find the handler function
 			let handlerFunction = null;
 			
-			// Check if handler name contains a dot (context.handler)
-			if (handler.includes('.')) {
+			// If contextId is provided in the options, use it directly
+			if (contextId && contexts[contextId]) {
+				// Get handler from the specified context
+				const contextObj = contexts[contextId].sandbox;
+				handlerFunction = contextObj[handler];
+			} else if (handler.includes('.')) {
+				// Legacy support: parse context.method format
 				const parts = handler.split('.');
 				const contextName = parts[0];
 				const methodName = parts[1];

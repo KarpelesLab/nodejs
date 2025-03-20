@@ -155,7 +155,9 @@ fmt.Println("Result2:", result2) // Output: Result2: undefined
 
 #### HTTP Integration with JavaScript Handlers
 
-You can serve HTTP requests directly to JavaScript handlers:
+You can serve HTTP requests directly to JavaScript handlers using two approaches:
+
+**Method 1: Using Context ServeHTTPToHandler**
 
 ```go
 // Create a JavaScript context
@@ -189,6 +191,46 @@ this.apiHandler = function(request) {
 // Create an HTTP handler that delegates to the JavaScript context
 http.HandleFunc("/api", func(w http.ResponseWriter, r *http.Request) {
     jsCtx.ServeHTTPToHandler("apiHandler", w, r)
+})
+
+// Start the HTTP server
+http.ListenAndServe(":8080", nil)
+```
+
+**Method 2: Using Process ServeHTTPWithOptions**
+
+This approach allows specifying the context separately for better separation of concerns:
+
+```go
+// Create a JavaScript context for API handlers
+apiContext, err := proc.NewContext()
+if err != nil {
+    // handle error
+}
+defer apiContext.Close()
+
+// Define a handler in the context
+_, err = apiContext.Eval(context.Background(), `
+// API handler
+this.handler = function(request) {
+    return new Response(JSON.stringify({
+        message: "Hello from API"
+    }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+    });
+};
+`, nil)
+
+// Create an HTTP handler using ServeHTTPWithOptions
+http.HandleFunc("/api", func(w http.ResponseWriter, r *http.Request) {
+    // Specify options with the context ID
+    options := nodejs.HTTPHandlerOptions{
+        Context: apiContext.ID(),
+    }
+    
+    // Call the handler directly with the context in options
+    proc.ServeHTTPWithOptions("handler", options, w, r)
 })
 
 // Start the HTTP server
