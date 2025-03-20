@@ -269,7 +269,6 @@
 				const response = await responsePromise;
 				
 				// Validate the response
-				console.log("Response check:", response?.constructor?.name, typeof response);
 				// Due to JavaScript context differences, instanceof may not work across contexts
 				// Instead, check if it has the expected Response properties
 				if (!response || typeof response !== 'object' || 
@@ -277,13 +276,7 @@
 					typeof response.status !== 'number') {
 					throw new Error('Handler must return a Response object');
 				}
-				console.log("Response is valid");
-				console.log("Response details:", JSON.stringify({
-					status: response.status,
-					bodyType: typeof response.body,
-					headersType: typeof response.headers
-				}));
-				
+
 				// Send headers to Go
 				// Convert headers to object (handle different Headers implementations)
 				const headersObj = {};
@@ -297,9 +290,7 @@
 					// Plain object with headers as properties
 					Object.assign(headersObj, response.headers);
 				}
-				
-				console.log("Headers object:", headersObj);
-				
+
 				pf.emit('send', {
 					'action': 'response',
 					data: { 
@@ -308,8 +299,9 @@
 						headers: headersObj
 					}
 				});
-				
+
 				// Get response body as buffer and send it
+				// Handle different kinds of responses
 				try {
 					if (typeof response.arrayBuffer === 'function') {
 						const arrayBuffer = await response.arrayBuffer();
