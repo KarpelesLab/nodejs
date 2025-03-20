@@ -10,8 +10,6 @@ import (
 
 // TestBasicFunctionality is a minimal test that should work in most environments
 func TestBasicFunctionality(t *testing.T) {
-	skipIfNodeJSUnavailable(t)
-
 	// Create factory
 	f, err := nodejs.New()
 	if err != nil {
@@ -30,10 +28,6 @@ func TestBasicFunctionality(t *testing.T) {
 	defer cancel()
 
 	result, err := proc.Eval(ctx, "2 + 2", nil)
-	if skipOnBootstrapIssue(t, err) {
-		return
-	}
-
 	if err != nil {
 		t.Fatalf("failed to evaluate simple expression: %s", err)
 	}
