@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -443,6 +445,22 @@ func (p *Process) GetVersion(what string) string {
 	return v
 }
 
+// SetHTTPHandler is deprecated. Use ServeHTTPToHandler with a handler function name instead.
+// This function will be removed in a future version.
+func (p *Process) SetHTTPHandler(name, handlerCode string) error {
+	var code string
+
+	// Check if name contains a dot (e.g., "myContext.handler")
+	if strings.Contains(name, ".") {
+		code = fmt.Sprintf(`%s = %s;`, name, handlerCode)
+	} else {
+		code = fmt.Sprintf(`global.%s = %s;`, name, handlerCode)
+	}
+
+	_, err := p.Eval(context.Background(), code, nil)
+	return err
+}
+
 func (p *Process) ping(cnt int) time.Duration {
 	var res time.Duration
 	success := 0
@@ -470,4 +488,201 @@ func (p *Process) getContext() context.Context {
 		return c
 	}
 	return context.Background()
+}
+
+// ServeHTTPToHandler converts an HTTP request to a JavaScript Fetch API compatible Request,
+// calls a handler in the NodeJS process, and streams the Response back to the Go ResponseWriter.
+//
+// The handlerFunc parameter is the name of the JavaScript handler function to call.
+// If handlerFunc contains a dot (e.g., "myContext.handler"), the function will be called within that context.
+// Otherwise, it will be called as a global function.
+//
+// The handler function should accept a Request object (compatible with the Fetch API) and
+// must return a Response object (also compatible with the Fetch API). For example:
+//
+//	// In JavaScript:
+//	myHandler = function(request) {
+//	  return new Response(JSON.stringify({hello: 'world'}), {
+//	    status: 200,
+//	    headers: {'Content-Type': 'application/json'}
+//	  });
+//	}
+//
+// The Request and Response objects are available in both global scope and context sandboxes,
+// and can also be imported in ES modules using:
+//
+//	import { Request, Response, Headers } from 'web-api';
+//
+// If an error occurs in the JavaScript handler, it will be logged and a 500 Internal Server Error
+// will be returned, unless headers have already been written to the response.
+func (p *Process) ServeHTTPToHandler(handlerFunc string, w http.ResponseWriter, r *http.Request) {
+	// Create a request ID for this HTTP request
+	reqID := rndstr.Simple(32, rndstr.Alnum)
+
+	// Extract request data to send to NodeJS
+	headers := make(map[string][]string)
+	for k, v := range r.Header {
+		headers[k] = v
+	}
+
+	// Read request body if present
+	var body []byte
+	var err error
+	if r.Body != nil {
+		body, err = io.ReadAll(r.Body)
+		if err != nil {
+			slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] failed to read request body: %s", err),
+				"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_body_read_fail")
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		defer r.Body.Close()
+	}
+
+	// Prepare request data for NodeJS
+	requestData := map[string]any{
+		"method":     r.Method,
+		"url":        r.URL.String(),
+		"path":       r.URL.Path,
+		"query":      r.URL.RawQuery,
+		"headers":    headers,
+		"body":       body,
+		"remoteAddr": r.RemoteAddr,
+		"host":       r.Host,
+	}
+
+	// Set up response channel
+	id, ch := p.MakeResponse()
+
+	// Send HTTP request to NodeJS
+	err = p.send(map[string]any{
+		"action":  "http.request",
+		"id":      id,
+		"reqID":   reqID,
+		"handler": handlerFunc,
+		"data":    requestData,
+	})
+
+	if err != nil {
+		slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] failed to send HTTP request to NodeJS: %s", err),
+			"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_send_fail")
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Set up header channel for incoming HTTP response headers
+	headerCh := p.makeHandle(reqID + ".headers")
+
+	// Set up body channel for incoming HTTP response body chunks
+	bodyCh := p.makeHandle(reqID + ".body")
+
+	// Set up error channel for JavaScript errors
+	errorCh := p.makeHandle(reqID + ".error")
+
+	// Set up completion channel to know when the response is fully sent
+	doneCh := p.makeHandle(reqID + ".done")
+
+	// Create context with timeout for the entire operation
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	// Wait for initial response with status code
+	var headersWritten bool
+	select {
+	case resp := <-ch:
+		if errMsg, hasError := resp["error"].(string); hasError {
+			slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] handler error: %s", errMsg),
+				"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_handler_error")
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+	case respHeaders := <-headerCh:
+		// Process response headers
+		statusCode, ok := respHeaders["statusCode"].(float64)
+		if !ok {
+			statusCode = 200
+		}
+
+		// Set response headers
+		if headers, ok := respHeaders["headers"].(map[string]any); ok {
+			for k, v := range headers {
+				switch val := v.(type) {
+				case string:
+					w.Header().Set(k, val)
+				case []any:
+					for _, hv := range val {
+						if hvStr, ok := hv.(string); ok {
+							w.Header().Add(k, hvStr)
+						}
+					}
+				}
+			}
+		}
+
+		// Write status code
+		w.WriteHeader(int(statusCode))
+		headersWritten = true
+	case err := <-errorCh:
+		if errMsg, ok := err["error"].(string); ok {
+			slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] handler error: %s", errMsg),
+				"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_handler_error")
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+	case <-ctx.Done():
+		slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] HTTP request timed out"),
+			"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_timeout")
+		if !headersWritten {
+			http.Error(w, "Request Timeout", http.StatusGatewayTimeout)
+		}
+		return
+	case <-p.alive:
+		slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] Process died during HTTP request"),
+			"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_process_died")
+		if !headersWritten {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	// If we get here, we need to process the body chunks and complete the response
+bodyLoop:
+	for {
+		select {
+		case bodyChunk := <-bodyCh:
+			// Process body chunk
+			if chunk, ok := bodyChunk["chunk"].([]byte); ok {
+				_, err := w.Write(chunk)
+				if err != nil {
+					slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] failed to write response chunk: %s", err),
+						"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_write_fail")
+					break bodyLoop
+				}
+			} else if chunk, ok := bodyChunk["chunk"].(string); ok {
+				_, err := w.Write([]byte(chunk))
+				if err != nil {
+					slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] failed to write response chunk: %s", err),
+						"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_write_fail")
+					break bodyLoop
+				}
+			}
+		case <-doneCh:
+			// Response is complete
+			break bodyLoop
+		case err := <-errorCh:
+			if errMsg, ok := err["error"].(string); ok {
+				slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] handler error during streaming: %s", errMsg),
+					"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_stream_error")
+			}
+			break bodyLoop
+		case <-ctx.Done():
+			slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] HTTP request timed out during streaming"),
+				"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_timeout")
+			break bodyLoop
+		case <-p.alive:
+			slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] Process died during HTTP streaming"),
+				"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_process_died")
+			break bodyLoop
+		}
+	}
 }
