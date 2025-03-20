@@ -28,16 +28,6 @@
 					},
 					{ identifier: 'synthetic:'+specifier },
 				);
-			case "web-api":
-				// Create a synthetic module for Web API compatibility
-				// No need to export Headers, Request, Response as they are globally available in Node.js 22+
-				return new vm.SyntheticModule(
-					[],
-					function init() {
-						// Empty init - classes are already available
-					},
-					{ identifier: 'synthetic:web-api' },
-				);
 		}
 		throw new Error(`Unknown import: ${specifier}`);
 	};
