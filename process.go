@@ -847,11 +847,10 @@ func (p *Process) ServeHTTPWithOptions(handlerFunc string, options HTTPHandlerOp
 
 	// If we get here, we need to collect all body chunks before writing the response
 	// This prevents race conditions with partial responses
-	var responseBuffer []byte
 	var receivedDone bool
 	var chunkTimeout = time.NewTimer(5 * time.Second)
 	defer chunkTimeout.Stop()
-	
+
 bodyLoop:
 	for !receivedDone {
 		select {
@@ -864,18 +863,26 @@ bodyLoop:
 				}
 			}
 			chunkTimeout.Reset(5 * time.Second)
-			
+
 			// Process body chunk and add to buffer instead of writing directly
 			if chunk, ok := bodyChunk["chunk"].([]byte); ok {
-				responseBuffer = append(responseBuffer, chunk...)
+				_, err := w.Write(chunk)
+				if err != nil {
+					slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] failed to write response body: %s", err),
+						"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_write_fail")
+				}
 			} else if chunk, ok := bodyChunk["chunk"].(string); ok {
 				chunkData, err := base64.StdEncoding.DecodeString(chunk)
 				if err != nil {
-					slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] failed to decode response chunk: %s", err), 
+					slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] failed to decode response chunk: %s", err),
 						"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_decode_fail")
 					continue // Skip this chunk but continue collecting
 				}
-				responseBuffer = append(responseBuffer, chunkData...)
+				_, err = w.Write(chunkData)
+				if err != nil {
+					slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] failed to write response body: %s", err),
+						"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_write_fail")
+				}
 			}
 		case <-doneCh:
 			// Response collection is complete
@@ -899,15 +906,6 @@ bodyLoop:
 			slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] Process died during HTTP streaming"),
 				"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_process_died")
 			break bodyLoop
-		}
-	}
-	
-	// Write the complete response in one go to avoid partial responses
-	if len(responseBuffer) > 0 {
-		_, err := w.Write(responseBuffer)
-		if err != nil {
-			slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] failed to write response body: %s", err),
-				"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_write_fail")
 		}
 	}
 }
