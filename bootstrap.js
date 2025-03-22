@@ -278,111 +278,109 @@
 				const response = await responsePromise;
 				
 				// Validate the response
-				// Due to JavaScript context differences, instanceof may not work across contexts
-				// Instead, check if it has the expected Response properties
 				if (!response || typeof response !== 'object' || 
 					typeof response.headers !== 'object' || 
 					typeof response.status !== 'number') {
 					throw new Error('Handler must return a Response object');
 				}
 
-				// Send headers to Go
-				// Convert headers to object (handle different Headers implementations)
-				const headersObj = {};
-				// Extract headers from the native Headers object or a plain object
-				if (typeof response.headers.forEach === 'function') {
-					// Standard Headers object with forEach method
-					response.headers.forEach((value, key) => {
-						headersObj[key] = value;
-					});
-				} else if (typeof response.headers === 'object') {
-					// Plain object with headers as properties
-					Object.assign(headersObj, response.headers);
-				}
-
-				pf.emit('send', {
-					'action': 'response',
-					data: { 
-						id: reqID + '.headers', 
-						statusCode: response.status,
-						headers: headersObj
-					}
-				});
-
-				// Get response body as buffer and send it
-				// Handle different kinds of responses
+				// Process the response in a reliable order to prevent race conditions
 				try {
-					let bodyContent = null;
+					// 1. Always try to get complete response body first
+					let responseText = null;
 					
-					// First try to get the complete body content using the most appropriate method
-					if (response.body) {
-						const reader = response.body.getReader()
-						// stream body to go
-						while(true) {
-							const { value, done } = await reader.read()
-							if (done) break;
-							pf.emit('send', {
-								'action': 'response',
-								data: { 
-									id: reqID + '.body',
-									chunk: Buffer.from(value).toString('base64')
-								}
-							});
-						}
-					} else if (typeof response.arrayBuffer === 'function') {
-						try {
-							const arrayBuffer = await response.arrayBuffer();
-							if (arrayBuffer && arrayBuffer.byteLength > 0) {
-								bodyContent = Buffer.from(arrayBuffer).toString('base64');
+					// Get the response body BEFORE sending any messages
+					if (typeof response.clone === 'function') {
+						// Create a clone to safely extract the body text
+						const clonedResponse = response.clone();
+						if (typeof clonedResponse.text === 'function') {
+							try {
+								responseText = await clonedResponse.text();
+							} catch (err) {
+								// Fallback to other methods
 							}
-						} catch (err) {
-							console.log(`Error extracting arrayBuffer: ${err}`);
-						}
-					} else if (typeof response.text === 'function') {
-						try {
-							// Use Response.text() method which returns a Promise of the body as text
-							const text = await response.text();
-							if (text && text.length > 0) {
-								bodyContent = text;
-							}
-						} catch (err) {
-							console.log(`Error extracting text: ${err}`);
 						}
 					}
 					
-					// Only after we have the full body content, send it to Go
-					if (bodyContent !== null) {
-						// Ensure we send the body first, then wait before sending done
+					// If we couldn't get the text from clone, try other methods
+					if (responseText === null) {
+						if (typeof response.text === 'function') {
+							try {
+								responseText = await response.text();
+							} catch (err) {
+								// Try next method
+							}
+						} else if (typeof response.arrayBuffer === 'function') {
+							try {
+								const buf = await response.arrayBuffer();
+								responseText = Buffer.from(buf).toString('utf8');
+							} catch (err) {
+								// No more fallbacks
+							}
+						}
+					}
+					
+					// 2. Extract headers from the Response object
+					const headersObj = {};
+					if (typeof response.headers.forEach === 'function') {
+						response.headers.forEach((value, key) => {
+							headersObj[key] = value;
+						});
+					} else if (typeof response.headers === 'object') {
+						Object.assign(headersObj, response.headers);
+					}
+					
+					// 3. Now send messages in the correct order:
+					
+					// Send headers first
+					pf.emit('send', {
+						'action': 'response',
+						data: { 
+							id: reqID + '.headers', 
+							statusCode: response.status,
+							headers: headersObj
+						}
+					});
+					
+					// Small delay to ensure headers are processed
+					await new Promise(resolve => setTimeout(resolve, 5));
+					
+					// 4. Send body content if we have it
+					if (responseText && responseText.length > 0) {
 						pf.emit('send', {
 							'action': 'response',
 							data: { 
 								id: reqID + '.body',
-								chunk: bodyContent
+								chunk: Buffer.from(responseText, "utf8").toString("base64")
 							}
 						});
+						
+						// Small delay to ensure body is processed
+						await new Promise(resolve => setTimeout(resolve, 5));
 					}
+					
+					// 5. Signal completion
+					pf.emit('send', {
+						'action': 'response',
+						data: { id: reqID + '.done' }
+					});
+					
+					// 6. Wait for previous messages to be processed
+					await new Promise(resolve => setTimeout(resolve, 30));
+					
+					// 7. Final success response
+					pf.emit('send', {
+						'action': 'response',
+						data: { id: id, res: true }
+					});
 				} catch (bodyError) {
-					console.log(`Error getting response body: ${bodyError.toString()}`);
+					throw bodyError;
 				}
-
-				// Wait a small amount of time to ensure that body content is fully processed
-				//await new Promise(resolve => setTimeout(resolve, 10));
 				
-				// Signal response completion
-				pf.emit('send', {
-					'action': 'response',
-					data: { id: reqID + '.done' }
-				});
-				
-				// Send success response to initial request
-				pf.emit('send', {
-					'action': 'response',
-					data: { id: id, res: true }
-				});
 			} catch (e) {
-				console.log(`HTTP handler error: ${e.toString()}`);
+				// Send error in the correct order
 				
-				// Send error notification
+				// First send error notification
 				pf.emit('send', {
 					'action': 'response',
 					data: { 
@@ -391,7 +389,17 @@
 					}
 				});
 				
-				// Send error to initial request
+				// Then send a done signal
+				await new Promise(resolve => setTimeout(resolve, 5));
+				pf.emit('send', {
+					'action': 'response',
+					data: { id: reqID + '.done' }
+				});
+				
+				// Wait for previous messages to be processed
+				await new Promise(resolve => setTimeout(resolve, 30));
+				
+				// Finally send the error to the initial request
 				pf.emit('send', {
 					'action': 'response',
 					data: { id: id, error: e.toString() }

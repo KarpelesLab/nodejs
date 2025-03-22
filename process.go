@@ -845,40 +845,51 @@ func (p *Process) ServeHTTPWithOptions(handlerFunc string, options HTTPHandlerOp
 		return
 	}
 
-	// If we get here, we need to process the body chunks and complete the response
+	// If we get here, we need to collect all body chunks before writing the response
+	// This prevents race conditions with partial responses
+	var responseBuffer []byte
+	var receivedDone bool
+	var chunkTimeout = time.NewTimer(5 * time.Second)
+	defer chunkTimeout.Stop()
+	
 bodyLoop:
-	for {
+	for !receivedDone {
 		select {
 		case bodyChunk := <-bodyCh:
-			// Process body chunk
-			if chunk, ok := bodyChunk["chunk"].([]byte); ok {
-				_, err := w.Write(chunk)
-				if err != nil {
-					slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] failed to write response chunk: %s", err),
-						"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_write_fail")
-					break bodyLoop
+			// Reset the timeout since we got a chunk
+			if !chunkTimeout.Stop() {
+				select {
+				case <-chunkTimeout.C:
+				default:
 				}
+			}
+			chunkTimeout.Reset(5 * time.Second)
+			
+			// Process body chunk and add to buffer instead of writing directly
+			if chunk, ok := bodyChunk["chunk"].([]byte); ok {
+				responseBuffer = append(responseBuffer, chunk...)
 			} else if chunk, ok := bodyChunk["chunk"].(string); ok {
 				chunkData, err := base64.StdEncoding.DecodeString(chunk)
 				if err != nil {
-					slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] failed to decode response chunk: %s", err), "platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_write_fail")
-					break bodyLoop
+					slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] failed to decode response chunk: %s", err), 
+						"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_decode_fail")
+					continue // Skip this chunk but continue collecting
 				}
-				_, err = w.Write(chunkData)
-				if err != nil {
-					slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] failed to write response chunk: %s", err),
-						"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_write_fail")
-					break bodyLoop
-				}
+				responseBuffer = append(responseBuffer, chunkData...)
 			}
 		case <-doneCh:
-			// Response is complete
-			break bodyLoop
+			// Response collection is complete
+			receivedDone = true
 		case err := <-errorCh:
 			if errMsg, ok := err["error"].(string); ok {
 				slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] handler error during streaming: %s", errMsg),
 					"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_stream_error")
 			}
+			break bodyLoop
+		case <-chunkTimeout.C:
+			// No chunks received for a while, assume we're done even without a done signal
+			slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] No response chunks received for 5 seconds, assuming complete"),
+				"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_chunk_timeout")
 			break bodyLoop
 		case <-ctx.Done():
 			slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] HTTP request timed out during streaming"),
@@ -888,6 +899,15 @@ bodyLoop:
 			slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] Process died during HTTP streaming"),
 				"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_process_died")
 			break bodyLoop
+		}
+	}
+	
+	// Write the complete response in one go to avoid partial responses
+	if len(responseBuffer) > 0 {
+		_, err := w.Write(responseBuffer)
+		if err != nil {
+			slog.ErrorContext(p.getContext(), fmt.Sprintf("[nodejs] failed to write response body: %s", err),
+				"platform-fe.module", "nodejs", "event", "platform-fe:nodejs:http_write_fail")
 		}
 	}
 }
