@@ -315,7 +315,21 @@
 					let bodyContent = null;
 					
 					// First try to get the complete body content using the most appropriate method
-					if (typeof response.arrayBuffer === 'function') {
+					if (response.body) {
+						const reader = response.body.getReader()
+						// stream body to go
+						while(true) {
+							const { value, done } = await reader.read()
+							if (done) break;
+							pf.emit('send', {
+								'action': 'response',
+								data: { 
+									id: reqID + '.body',
+									chunk: Buffer.from(value).toString('base64')
+								}
+							});
+						}
+					} else if (typeof response.arrayBuffer === 'function') {
 						try {
 							const arrayBuffer = await response.arrayBuffer();
 							if (arrayBuffer && arrayBuffer.byteLength > 0) {
@@ -334,17 +348,6 @@
 						} catch (err) {
 							console.log(`Error extracting text: ${err}`);
 						}
-					} else if (response.body) {
-						try {
-							// Direct body property
-							if (typeof response.body === 'string') {
-								bodyContent = Buffer.from(response.body, 'utf8').toString('base64');
-							} else {
-								bodyContent = Buffer.from(response.body).toString('base64');
-							}
-						} catch (err) {
-							console.log(`Error extracting body: ${err}`);
-						}
 					}
 					
 					// Only after we have the full body content, send it to Go
@@ -361,9 +364,9 @@
 				} catch (bodyError) {
 					console.log(`Error getting response body: ${bodyError.toString()}`);
 				}
-				
+
 				// Wait a small amount of time to ensure that body content is fully processed
-				await new Promise(resolve => setTimeout(resolve, 10));
+				//await new Promise(resolve => setTimeout(resolve, 10));
 				
 				// Signal response completion
 				pf.emit('send', {
