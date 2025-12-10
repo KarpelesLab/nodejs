@@ -18,20 +18,32 @@
 	// - Request
 	// - Response
 	
-	// Basic linker for ES modules
+	// Basic linker for ES modules - supports safe Node.js built-in modules
+	// NOTE: Do NOT add fs, child_process, net, etc. - they are security risks
+	const builtinModules = new Set([
+		'crypto', 'node:crypto',
+		'stream', 'node:stream',
+		'buffer', 'node:buffer',
+		'util', 'node:util',
+		'path', 'node:path',
+		'url', 'node:url',
+		'querystring', 'node:querystring',
+		'events', 'node:events',
+		'assert', 'node:assert',
+	]);
+
 	const basicLinker = async (specifier) => {
-		switch(specifier) {
-			case "node:stream":
-				const mod = await import(specifier);
-				const keys = Object.keys(mod);
-				return new vm.SyntheticModule(
-					[...keys],
-					function init() {
-						for (const k of keys)
-							this.setExport(k, mod[k]);
-					},
-					{ identifier: `synthetic:${specifier}` },
-				);
+		if (builtinModules.has(specifier)) {
+			const mod = await import(specifier.startsWith('node:') ? specifier : `node:${specifier}`);
+			const keys = Object.keys(mod);
+			return new vm.SyntheticModule(
+				[...keys],
+				function init() {
+					for (const k of keys)
+						this.setExport(k, mod[k]);
+				},
+				{ identifier: `synthetic:${specifier}` },
+			);
 		}
 		throw new Error(`Unknown import: ${specifier}`);
 	};
